@@ -16,10 +16,71 @@ DB_CONFIG = {
 pila_productos = []
 cola_productos = deque()
 
-
 def obtener_conexion():
     return pymysql.connect(**DB_CONFIG)
 
+def limpiar_base_datos():
+    conn = obtener_conexion()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            cursor.execute("TRUNCATE TABLE productos;")
+            cursor.execute("TRUNCATE TABLE grupo_investigador;")
+            cursor.execute("TRUNCATE TABLE investigadores;")
+            cursor.execute("TRUNCATE TABLE grupos;")
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
+        conn.commit()
+        print("\n[BD] Se han eliminado todos los registros guardados anteriormente.")
+    finally:
+        conn.close()
+        
+def cargar_estructuras_en_memoria():
+    global pila_productos, cola_productos
+    pila_productos.clear()
+    cola_productos.clear()
+
+    conn = obtener_conexion()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT codigo FROM productos")
+            registros = cursor.fetchall()
+            for r in registros:
+                pila_productos.append(r["codigo"])
+                cola_productos.append(r["codigo"])
+        if registros:
+            print(f"\n[Persistencia] Se cargaron {len(registros)} producto(s) previos en Pila/Cola.")
+    finally:
+        conn.close()
+
+def gestionar_persistencia():
+    crear_tablas()
+    # Verificar si hay datos previos
+
+    conn = obtener_conexion()
+    hay_datos = False
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) AS total FROM grupos")
+            tot_g = cursor.fetchone()["total"]
+            cursor.execute("SELECT COUNT(*) AS total FROM productos")
+            tot_p = cursor.fetchone()["total"]
+            if tot_g > 0 or tot_p > 0:
+                hay_datos = True
+    finally:
+        conn.close()
+
+    if hay_datos:
+        print("\n================ CONFIGURACIÓN DE DATOS ================")
+        print("\nSe encontraron datos guardados de sesiones anteriores en MySQL.")
+        print("\n1. Mantener los datos anteriores y continuar con ellos")
+        print("\n2. Borrar todos los datos y empezar una base de datos limpia")
+        op = input("Seleccione una opción (1/2) [Por defecto 1]: ").strip()
+
+        if op == "2":
+            limpiar_base_datos()
+        else:
+            cargar_estructuras_en_memoria()
+            print("\n[Persistencia] Continuando con la base de datos existente.")
 
 def crear_tablas():
     conn = obtener_conexion()
@@ -539,6 +600,7 @@ def menu_productos():
 
 def menu():
     crear_tablas()  # Asegura que las tablas existan al iniciar
+    gestionar_persistencia()  # Maneja la persistencia de datos al iniciar
     opcion = ""
     while opcion != "0":
         print("\n========== PEA-i (PyMySQL Directo / UPC) ==========")
