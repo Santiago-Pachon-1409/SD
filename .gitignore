@@ -3,3 +3,6 @@
 *.dev.bak
 Makefile.win
 .db-journal
+**/pea_db.sql
+**/pea.db
+
