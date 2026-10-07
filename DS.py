@@ -15,7 +15,6 @@ RUTA_BD = os.path.join(
 engine = create_engine(f"sqlite:///{RUTA_BD}")
 metadata = MetaData()
 
-
 grupos = Table(
     "grupos",
     metadata,
@@ -89,7 +88,87 @@ metadata.create_all(engine)
 
 pila_productos = []
 cola_productos = deque()
+multilista_grupos = []
 
+def vaciar_multilista():
+    multilista_grupos.clear()
+
+def crear_nodo_producto(codigo, nombre, categoria, anio, validacion, estado="Activo"):
+    return {
+        "codigo": codigo,
+        "nombre": nombre,
+        "categoria": categoria,
+        "anio": anio,
+        "validacion": validacion,
+        "estado": estado
+    }
+
+def crear_nodo_investigador(codigo, nombre, correo, estado="Activo"):
+    return {
+        "codigo": codigo,
+        "nombre": nombre,
+        "correo": correo,
+        "estado": estado,
+        "productos": []  
+    }
+
+def crear_nodo_grupo(codigo, nombre, area, estado="Activo"):
+    return {
+        "codigo": codigo,
+        "nombre": nombre,
+        "area": area,
+        "estado": estado,
+        "investigadores": []  # Lista encadenada de investigadores
+    }
+def agregar_o_buscar_investigador_ml(grupo_codigo, inv_codigo, nombre="Sin Nombre", correo="correo@unicesar.edu.co"):
+    grupo = agregar_o_buscar_grupo_ml(grupo_codigo)
+
+    for inv in grupo["investigadores"]:
+        if inv["codigo"] == inv_codigo:
+            return inv
+    nuevo_inv = crear_nodo_investigador(inv_codigo, nombre, correo)
+    grupo["investigadores"].append(nuevo_inv)
+    return nuevo_inv
+
+def agregar_o_buscar_grupo_ml(codigo, nombre="Sin Nombre", area="General"):
+    for grupo in multilista_grupos:
+        if grupo["codigo"] == codigo:
+            return grupo
+    # Si no se encuentra, se crea un nuevo grupo
+    nuevo_grupo = crear_nodo_grupo(codigo, nombre, area)
+    multilista_grupos.append(nuevo_grupo)
+    return nuevo_grupo
+
+def agregar_producto_ml(grupo_codigo, inv_codigo, prod_codigo, nombre, categoria, anio, validacion="Validado"):
+    investigador = agregar_o_buscar_investigador_ml(grupo_codigo, inv_codigo)
+
+    # Evitar duplicados
+    for prod in investigador["productos"]:
+        if prod["codigo"] == prod_codigo:
+            return
+
+    nuevo_prod = crear_nodo_producto(prod_codigo, nombre, categoria, anio, validacion)
+    investigador["productos"].append(nuevo_prod)
+
+def mostrar_multilista_estructurada():
+        if not multilista_grupos:
+            print("\n[Multilista] La multilista en memoria está vacía.")
+            return
+    
+        print("          RECORRIDO DE LA MULTILISTA EN MEMORIA (PEA-i)")
+        for grupo in multilista_grupos:
+            print(f"\n[GRUPO] {grupo['codigo']} - {grupo['nombre']} ({grupo['area']})")
+            if not grupo["investigadores"]:
+                print("   (Sin investigadores asociados)")
+
+            for inv in grupo["investigadores"]:
+                print(f"  [INVESTIGADOR] {inv['codigo']} - {inv['nombre']} ({inv['correo']})")
+                if not inv["productos"]:
+                    print("         (Sin productos registrados)")
+
+                for prod in inv["productos"]:
+                    print(f"          [PRODUCTO] {prod['codigo']} | {prod['nombre'][:40]}... | {prod['categoria']} | {prod['anio']}")
+        
 def crear_tablas():
     metadata.create_all(engine)
 
@@ -147,36 +226,49 @@ def limpiar_base_datos():
     print("\n[BD] Se eliminaron todos los registros.")
 
 
-def cargar_estructuras_en_memoria():
+def cargar_estructuras_guardadas():
 
     pila_productos.clear()
     cola_productos.clear()
+    vaciar_multilista()
 
     with engine.connect() as conn:
 
         registros = conn.execute(
-            select(productos.c.codigo)
-        ).scalars().all()
+            select(productos.c.codigo,
+                productos.c.nombre,
+                productos.c.categoria,
+                productos.c.anio,
+                productos.c.validacion,
+                productos.c.investigador_codigo,
+                productos.c.grupo_codigo)
+        ).mappings().all()
 
-    for codigo in registros:
+    for p in registros:
+        pila_productos.append(p["codigo"])
+        cola_productos.append(p["codigo"])
 
-        pila_productos.append(codigo)
-        cola_productos.append(codigo)
+        g_cod = p["grupo_codigo"] if p["grupo_codigo"] else "G-BASE"
+        inv_cod = p["investigador_codigo"] if p["investigador_codigo"] else "INV-BASE"
+
+        agregar_producto_ml(
+            grupo_codigo=g_cod,
+            inv_codigo=inv_cod,
+            prod_codigo=p["codigo"],
+            nombre=p["nombre"],
+            categoria=p["categoria"],
+            anio=p["anio"],
+            validacion=p["validacion"]
+        )
 
     if registros:
-
-        print(
-            f"\n[Persistencia] "
-            f"Se cargaron {len(registros)} producto(s) "
-            f"en la pila y la cola."
-        )
+        print(f"\n[Persistencia] Se cargaron {len(registros)} productos en Pila, Cola y Multilista.")
 
 def gestionar_persistencia():
 
     crear_tablas()
 
     with engine.connect() as conn:
-
         total_grupos = conn.execute(
             select(func.count()).select_from(grupos)
         ).scalar()
@@ -186,33 +278,21 @@ def gestionar_persistencia():
         ).scalar()
 
     if total_grupos > 0 or total_productos > 0:
+        print("\n================ CONFIGURACIÓN DE PERSISTENCIA ================")
+        print("Se encontraron datos guardados de sesiones anteriores en SQLite.")
+        print("\n1. Continuar con la información existente")
+        print("2. Iniciar una nueva sesión desde cero (Borrar datos anteriores)")
 
-        print("\n================ CONFIGURACIÓN DE DATOS ================")
-
-        print(
-            "\nSe encontraron datos guardados "
-            "de sesiones anteriores en SQLite."
-        )
-
-        print("\n1. Mantener los datos anteriores")
-        print("2. Borrar todos los datos")
-
-        opcion = input(
-            "\nSeleccione una opción (1/2) [Por defecto 1]: "
-        ).strip()
+        opcion = input( "\nSeleccione una opción (1/2) [Por defecto 1]: ").strip()
 
         if opcion == "2":
 
             limpiar_base_datos()
-
+            print("\n[Persistencia] Se ha reiniciado la base de datos. Iniciando sesión nueva vacía.")
         else:
 
-            cargar_estructuras_en_memoria()
-
-            print(
-                "\n[Persistencia] "
-                "Continuando con la base de datos existente."
-            )
+            cargar_estructuras_guardadas()
+            print("\n[Persistencia] Cargando datos anteriores en memoria y BD...")
 
 
 def crear_grupo():
@@ -363,6 +443,17 @@ def crear_producto():
 
     pila_productos.append(codigo)
     cola_productos.append(codigo)
+
+    g_cod = grupo_codigo if grupo_codigo else "G-BASE"
+    agregar_producto_ml(
+        grupo_codigo=g_cod,
+        inv_codigo=investigador_codigo,
+        prod_codigo=codigo,
+        nombre=nombre,
+        categoria=categoria,
+        anio=anio,
+        validacion=validacion
+    )
 
     print(
         "Producto registrado correctamente "
@@ -697,6 +788,7 @@ def descargar_desde_url():
         contador = 1
         registros_extraidos = []
 
+        # Asegurar que existan un grupo e investigador base en SQLite
         with engine.begin() as conn:
             if not buscar_grupo("G-001"):
                 conn.execute(
@@ -741,6 +833,7 @@ def descargar_desde_url():
             nombre_prod = texto_completo.replace(',', ' ').replace('"', '')[:100]
             codigo_prod = f"PROD-WEB-{contador:03d}"
 
+            # 1. Guardar en la Base de Datos SQLite
             if not buscar_producto(codigo_prod):
                 with engine.begin() as conn:
                     conn.execute(
@@ -755,19 +848,33 @@ def descargar_desde_url():
                             grupo_codigo="G-001"
                         )
                     )
+                
+                # 2. Guardar en Pila y Cola
                 pila_productos.append(codigo_prod)
                 cola_productos.append(codigo_prod)
+
+                # 3. Guardar en la Multilista en memoria (Sin POO)
+                agregar_producto_ml(
+                    grupo_codigo="G-001",
+                    inv_codigo="INV-001",
+                    prod_codigo=codigo_prod,
+                    nombre=nombre_prod,
+                    categoria=categoria,
+                    anio=anio,
+                    validacion="Validado"
+                )
+
                 contador += 1
 
             registros_extraidos.append([codigo_prod, nombre_prod, categoria, anio, "Validado", "G-001"])
 
+        # Archivo auxiliar opcional para transferencia/C++
         with open("datos_scraping.csv", mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(["codigo", "nombre", "categoria", "anio", "validacion", "grupo_codigo"])
             writer.writerows(registros_extraidos)
 
-        print(f"\n[Scraping] Se importaron {contador - 1} productos directamente a la BD y Pila/Cola.")
-        print("[Respaldo] Se actualizó el archivo auxiliar 'datos_scraping.csv'.")
+        print(f"\n[Scraping] Se importaron {contador - 1} productos directamente a la BD, Pila, Cola y Multilista.")
 
     except Exception as e:
         print(f"\nError en Web Scraping: {e}")
@@ -982,8 +1089,9 @@ def menu():
         print("2. Investigadores")
         print("3. Productos de investigación")
         print("4. Estadísticas")
-        print("5. Ver pila de productos (LIFO)")
-        print("6. Ver cola de productos (FIFO)")
+        print("5. Ver multilista de productos")
+        print("6. Ver pila de productos (LIFO)")
+        print("7. Ver cola de productos (FIFO)")
         print("0. Salir")
 
         opcion = input(
@@ -991,49 +1099,32 @@ def menu():
         ).strip()
 
         if opcion == "1":
-
             menu_grupos()
-
+        
         elif opcion == "2":
-
             menu_investigadores()
-
+        
         elif opcion == "3":
-
             menu_productos()
 
         elif opcion == "4":
-
             estadisticas()
 
         elif opcion == "5":
-
-            print(
-                "\nPila de productos (LIFO):"
-            )
-
-            print(pila_productos)
+            mostrar_multilista_estructurada()
 
         elif opcion == "6":
+            print("\nPila de productos (LIFO):", pila_productos)
 
-            print(
-                "\nCola de productos (FIFO):"
-            )
-
-            print(list(cola_productos))
+        elif opcion == "7":
+            print("\nCola de productos (FIFO):", list(cola_productos))
 
         elif opcion == "0":
-
-            print(
-                "\nPrograma finalizado."
-            )
+            print("\nPrograma finalizado.")
 
         else:
-
-            print(
-                "\nOpción no válida."
-            )
-
+            print("\nOpción no válida.")
+            
 if __name__ == "__main__":
 
     menu()
