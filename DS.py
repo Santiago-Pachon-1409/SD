@@ -1,10 +1,11 @@
 import csv
 import os
 import re
+import json
+import subprocess
 from collections import deque
 import urllib.request
 from bs4 import BeautifulSoup
-import matplotlib.pyplot as plt
 from sqlalchemy import (create_engine, MetaData, Table, Column, String, Integer, ForeignKey, select, update, delete, func)
 
 import tkinter as tk
@@ -177,6 +178,63 @@ def cargar_estructuras_guardadas():
             validacion=p["validacion"]
         )
 
+def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
+    with engine.connect() as conn:
+        registros = conn.execute(
+            select(
+                productos.c.codigo,
+                productos.c.nombre,
+                productos.c.categoria,
+                productos.c.anio,
+                productos.c.validacion,
+                productos.c.grupo_codigo,
+                productos.c.investigador_codigo
+            )
+        ).mappings().all()
+
+    lista_productos = []
+    for r in registros:
+        lista_productos.append({
+            "codigo": r["codigo"],
+            "nombre": r["nombre"],
+            "categoria": r["categoria"],
+            "anio": r["anio"],
+            "validacion": r["validacion"],
+            "grupo_codigo": r["grupo_codigo"] if r["grupo_codigo"] else "G-001",
+            "investigador_codigo": r["investigador_codigo"] if r["investigador_codigo"] else "INV-001"
+        })
+
+    with open(ruta_salida, mode='w', encoding='utf-8') as f:
+        json.dump(lista_productos, f, indent=4, ensure_ascii=False)
+
+def ejecutar_procesador_cpp_gui():
+    exportar_todo_a_json("datos_entrada.json")
+    
+    ejecutable = "./procesador" if os.name != "nt" else "procesador.exe"
+    
+    if not os.path.exists(ejecutable) and os.path.exists("procesador.cpp"):
+        os.system("g++ -o procesador procesador.cpp")
+
+    if not os.path.exists(ejecutable):
+        messagebox.showerror("Error C++", "No se encontró el ejecutable ni el archivo fuente 'procesador.cpp'.")
+        return
+
+    try:
+        resultado = subprocess.run([ejecutable, "datos_entrada.json"], capture_output=True, text=True)
+        salida_cpp = resultado.stdout
+        
+        top = tk.Toplevel()
+        top.title("Reporte Estadístico - Procesado en C++ (vía JSON)")
+        top.geometry("480x320")
+        
+        txt = tk.Text(top, wrap="word", font=("Consolas", 10))
+        txt.pack(fill="both", expand=True, padx=10, pady=10)
+        txt.insert(tk.END, salida_cpp)
+        txt.config(state="disabled")
+        
+    except Exception as e:
+        messagebox.showerror("Error", f"Fallo al ejecutar C++: {e}")
+
 def descargar_desde_url_gui(ventana_padre):
     url = simpledialog.askstring("Web Scraping MinCiencias", "Ingrese la URL a procesar (GrupLAC/CvLAC):", parent=ventana_padre)
     if not url:
@@ -307,44 +365,6 @@ def importar_csv_gui(ventana_padre):
     except Exception as e:
         messagebox.showerror("Error", f"Error al importar CSV: {e}")
 
-def estadisticas():
-    with engine.connect() as conn:
-        categorias = conn.execute(
-            select(productos.c.categoria, func.count().label("cantidad")).group_by(productos.c.categoria)
-        ).mappings().all()
-
-        anios = conn.execute(
-            select(productos.c.anio, func.count().label("cantidad")).group_by(productos.c.anio)
-        ).mappings().all()
-
-    if not categorias and not anios:
-        messagebox.showwarning("Sin Datos", "No hay datos suficientes para generar el Dashboard.")
-        return
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
-    fig.canvas.manager.set_window_title('PEA-i - Dashboard Estadístico')
-    fig.suptitle('DASHBOARD ESTADÍSTICO DE INVESTIGACIÓN (UPC)', fontsize=13, fontweight='bold')
-
-    cats = [c['categoria'] for c in categorias]
-    c_cants = [c['cantidad'] for c in categorias]
-    ax1.bar(cats, c_cants, color='#0056b3', edgecolor='black')
-    ax1.set_title('Productos por Categoría')
-    ax1.set_xlabel('Categorías')
-    ax1.set_ylabel('Cantidad')
-    ax1.tick_params(axis='x', rotation=25)
-    ax1.grid(axis='y', linestyle='--', alpha=0.7)
-
-    a_anios = [str(a['anio']) for a in anios]
-    a_cants = [a['cantidad'] for a in anios]
-    ax2.bar(a_anios, a_cants, color='#28a745', edgecolor='black')
-    ax2.set_title('Distribución por Año de Publicación')
-    ax2.set_xlabel('Año')
-    ax2.set_ylabel('Cantidad')
-    ax2.grid(axis='y', linestyle='--', alpha=0.7)
-
-    plt.tight_layout()
-    plt.show()
-
 def refrescar_tabla_grupos(tree):
     for item in tree.get_children():
         tree.delete(item)
@@ -382,34 +402,10 @@ def refrescar_tabla_productos(tree):
     for p in registros:
         tree.insert("", "end", values=(p["codigo"], p["nombre"], p["categoria"], p["anio"], p["validacion"], p["investigador_codigo"], p["estado"]))
 
-def refrescar_tree_multilista(tree):
-    for item in tree.get_children():
-        tree.delete(item)
-    for g in multilista_grupos:
-        g_node = tree.insert("", "end", text=f"Grupo: {g['codigo']} - {g['nombre']} ({g['area']})", open=True)
-        for inv in g["investigadores"]:
-            inv_node = tree.insert(g_node, "end", text=f"Investigador: {inv['codigo']} - {inv['nombre']}", open=True)
-            for prod in inv["productos"]:
-                tree.insert(inv_node, "end", text=f"Producto: {prod['codigo']} | {prod['nombre']} | {prod['categoria']} | {prod['anio']}")
-
-def refrescar_estructuras_memoria(txt_pila, txt_cola):
-    txt_pila.config(state="normal")
-    txt_cola.config(state="normal")
-    txt_pila.delete("1.0", tk.END)
-    txt_cola.delete("1.0", tk.END)
-
-    txt_pila.insert(tk.END, " -> ".join(reversed(pila_productos)) if pila_productos else "Pila vacía")
-    txt_cola.insert(tk.END, " -> ".join(cola_productos) if cola_productos else "Cola vacía")
-
-    txt_pila.config(state="disabled")
-    txt_cola.config(state="disabled")
-
 def refrescar_todas_las_tablas():
     refrescar_tabla_grupos(tree_grupos)
     refrescar_tabla_investigadores(tree_inv)
     refrescar_tabla_productos(tree_prod)
-    refrescar_tree_multilista(tree_ml)
-    refrescar_estructuras_memoria(txt_pila_gui, txt_cola_gui)
 
 def abrir_formulario_grupo(root):
     top = tk.Toplevel(root)
@@ -592,7 +588,7 @@ def desactivar_producto_gui():
     refrescar_todas_las_tablas()
 
 def iniciar_interfaz_grafica():
-    global tree_grupos, tree_inv, tree_prod, tree_ml, txt_pila_gui, txt_cola_gui
+    global tree_grupos, tree_inv, tree_prod
 
     crear_tablas()
     with engine.connect() as conn:
@@ -608,7 +604,7 @@ def iniciar_interfaz_grafica():
 
     root = tk.Tk()
     root.title("PEA-i - Sistema de Gestión de Investigación (UPC)")
-    root.geometry("850x600")
+    root.geometry("850x550")
 
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True, padx=10, pady=10)
@@ -655,30 +651,12 @@ def iniciar_interfaz_grafica():
     ttk.Button(btn_bar_gi, text="Crear Grupo", command=lambda: abrir_formulario_grupo(root)).pack(side="left", padx=5)
     ttk.Button(btn_bar_gi, text="Crear Investigador", command=lambda: abrir_formulario_investigador(root)).pack(side="left", padx=5)
 
-    frame_ml = ttk.Frame(notebook)
-    notebook.add(frame_ml, text="Multilista (Grupo -> Inv -> Prod)")
-
-    tree_ml = ttk.Treeview(frame_ml)
-    tree_ml.heading("#0", text="Estructura Jerárquica en Memoria", anchor="w")
-    tree_ml.pack(fill="both", expand=True, padx=5, pady=5)
-
-    frame_pc = ttk.Frame(notebook)
-    notebook.add(frame_pc, text="Pila (LIFO) y Cola (FIFO)")
-
-    ttk.Label(frame_pc, text="Pila de Productos (LIFO - Último en entrar, primero en salir):", font=("Arial", 10, "bold")).pack(anchor="w", padx=10, pady=5)
-    txt_pila_gui = tk.Text(frame_pc, height=4, wrap="word")
-    txt_pila_gui.pack(fill="x", padx=10, pady=5)
-
-    ttk.Label(frame_pc, text="Cola de Productos (FIFO - Primero en entrar, primero en salir):", font=("Arial", 10, "bold")).pack(anchor="w", padx=10, pady=5)
-    txt_cola_gui = tk.Text(frame_pc, height=4, wrap="word")
-    txt_cola_gui.pack(fill="x", padx=10, pady=5)
-
     frame_dash = ttk.Frame(notebook)
-    notebook.add(frame_dash, text="Dashboard Estadístico")
+    notebook.add(frame_dash, text="Reporte C++")
 
-    lbl_d = ttk.Label(frame_dash, text="Visualización de Gráficos Estadísticos (Matplotlib)", font=("Arial", 11, "bold"))
+    lbl_d = ttk.Label(frame_dash, text="Procesamiento Estadístico en C++ (vía JSON)", font=("Arial", 11, "bold"))
     lbl_d.pack(pady=20)
-    ttk.Button(frame_dash, text="Abrir Dashboard Gráfico (Barras / Histograma)", command=estadisticas).pack(pady=10)
+    ttk.Button(frame_dash, text="Generar Reporte Estadístico (Invocar C++)", command=ejecutar_procesador_cpp_gui).pack(pady=10)
 
     refrescar_todas_las_tablas()
 
