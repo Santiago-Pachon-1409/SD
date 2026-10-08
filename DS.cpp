@@ -33,6 +33,11 @@ struct NodoGrupo {
     NodoGrupo* sig;
 };
 
+struct ConteoAnio {
+    int anio;
+    int cantidad;
+};
+
 // =========================================================================
 // FUNCIONES PROCEDIMENTALES DE MANEJO DE LA MULTILISTA
 // =========================================================================
@@ -175,27 +180,36 @@ void cargarJSONEnMultilista(const char* rutaArchivo, NodoGrupo** multilista) {
 }
 
 // =========================================================================
-// CÁLCULO ESTADÍSTICO Y REPORTE DE SALIDA
+// RENDERIZADO DE HISTOGRAMAS EN FORMATO ASCII
+// =========================================================================
+
+void imprimirBarraHistograma(int valor, int maxValor, int anchoMax = 20) {
+    int barras = (maxValor > 0) ? (valor * anchoMax / maxValor) : 0;
+    if (valor > 0 && barras == 0) barras = 1;
+
+    for (int i = 0; i < barras; i++) {
+        cout << "█";
+    }
+    cout << " (" << valor << ")" << endl;
+}
+
+// =========================================================================
+// CÁLCULO ESTADÍSTICO Y GENERACIÓN DE REPORTES
 // =========================================================================
 
 void generarReporteEstadistico(NodoGrupo* multilista) {
-    int totalGrupos = 0;
-    int totalInvestigadores = 0;
+    int totalArticulos = 0, totalLibros = 0, totalSoftware = 0, totalGenericos = 0;
     int totalProductos = 0;
 
-    int totalArticulos = 0;
-    int totalLibros = 0;
-    int totalSoftware = 0;
-    int totalGenericos = 0;
-
-    int anioMin = 9999, anioMax = 0;
+    // Arreglo procedimental para conteo por año
+    ConteoAniosLista:
+    ConteoAnio conteoAnios[100];
+    int numAnios = 0;
 
     NodoGrupo* g = multilista;
     while (g != NULL) {
-        totalGrupos++;
         NodoInvestigador* inv = g->investigadores;
         while (inv != NULL) {
-            totalInvestigadores++;
             NodoProducto* p = inv->productos;
             while (p != NULL) {
                 totalProductos++;
@@ -207,10 +221,20 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
                 else totalGenericos++;
 
                 if (p->anio > 0) {
-                    if (p->anio < anioMin) anioMin = p->anio;
-                    if (p->anio > anioMax) anioMax = p->anio;
+                    bool encontrado = false;
+                    for (int i = 0; i < numAnios; i++) {
+                        if (conteoAnios[i].anio == p->anio) {
+                            conteoAnios[i].cantidad++;
+                            encontrado = true;
+                            break;
+                        }
+                    }
+                    if (!encontrado && numAnios < 100) {
+                        conteoAnios[numAnios].anio = p->anio;
+                        conteoAnios[numAnios].cantidad = 1;
+                        numAnios++;
+                    }
                 }
-
                 p = p->sig;
             }
             inv = inv->sig;
@@ -218,37 +242,111 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
         g = g->sig;
     }
 
+    // Ordenar años procedimentalmente (Bubble Sort)
+    for (int i = 0; i < numAnios - 1; i++) {
+        for (int j = 0; j < numAnios - i - 1; j++) {
+            if (conteoAnios[j].anio > conteoAnios[j + 1].anio) {
+                ConteoAnio temp = conteoAnios[j];
+                conteoAnios[j] = conteoAnios[j + 1];
+                conteoAnios[j + 1] = temp;
+            }
+        }
+    }
+
+    int maxCat = max(max(totalArticulos, totalLibros), max(totalSoftware, totalGenericos));
+
     cout << "==================================================" << endl;
-    cout << "   REPORTE DE ESTADÍSTICAS PROCESADO EN C++       " << endl;
+    cout << "   REPORTE ESTADÍSTICO CON HISTOGRAMAS (C++)      " << endl;
     cout << "==================================================" << endl << endl;
 
+    // --------------------------------------------------
+    // HISTOGRAMA 1: POR CATEGORÍA
+    // --------------------------------------------------
     cout << "--------------------------------------------------" << endl;
-    cout << " 1. RESUMEN DE ESTRUCTURA JERÁRQUICA (MULTILISTA)  " << endl;
+    cout << " 1. HISTOGRAMA DE PRODUCTOS POR CATEGORÍA         " << endl;
     cout << "--------------------------------------------------" << endl;
-    cout << " • Total Grupos de Investigación : " << totalGrupos << endl;
-    cout << " • Total Investigadores Reales   : " << totalInvestigadores << endl;
-    cout << " • Total Productos Registrados   : " << totalProductos << endl << endl;
+    cout << " Artículos    | "; imprimirBarraHistograma(totalArticulos, maxCat);
+    cout << " Libros/Cap.  | "; imprimirBarraHistograma(totalLibros, maxCat);
+    cout << " Software     | "; imprimirBarraHistograma(totalSoftware, maxCat);
+    cout << " Otr/Genérico | "; imprimirBarraHistograma(totalGenericos, maxCat);
+    cout << endl;
 
+    // --------------------------------------------------
+    // HISTOGRAMA 2: POR AÑO DE PUBLICACIÓN
+    // --------------------------------------------------
     cout << "--------------------------------------------------" << endl;
-    cout << " 2. DESGLOSE DE PRODUCTOS POR CATEGORÍA           " << endl;
+    cout << " 2. HISTOGRAMA CRONOLÓGICO POR AÑO                " << endl;
     cout << "--------------------------------------------------" << endl;
-    cout << " • Artículos Científicos : " << totalArticulos << endl;
-    cout << " • Libros / Capítulos    : " << totalLibros << endl;
-    cout << " • Software / Desarrollo  : " << totalSoftware << endl;
-    cout << " • Otras Categorías      : " << totalGenericos << endl << endl;
-
-    cout << "--------------------------------------------------" << endl;
-    cout << " 3. RANGO CRONOLÓGICO DE PRODUCCIÓN                " << endl;
-    cout << "--------------------------------------------------" << endl;
-    if (totalProductos > 0 && anioMin != 9999) {
-        cout << " • Año de publicación más antiguo : " << anioMin << endl;
-        cout << " • Año de publicación más reciente : " << anioMax << endl;
+    if (numAnios == 0) {
+        cout << " [Sin datos de años para graficar]" << endl;
     } else {
-        cout << " • Sin datos de fechas válidas." << endl;
+        int maxAnioCant = 0;
+        for (int i = 0; i < numAnios; i++) {
+            if (conteoAnios[i].cantidad > maxAnioCant) maxAnioCant = conteoAnios[i].cantidad;
+        }
+        for (int i = 0; i < numAnios; i++) {
+            cout << " " << conteoAnios[i].anio << "         | ";
+            imprimirBarraHistograma(conteoAnios[i].cantidad, maxAnioCant);
+        }
     }
+    cout << endl;
+
+    // --------------------------------------------------
+    // HISTOGRAMA 3: POR INVESTIGADOR
+    // --------------------------------------------------
     cout << "--------------------------------------------------" << endl;
-    cout << " STATUS: Procesamiento finalizado con éxito (No-POO)." << endl;
+    cout << " 3. HISTOGRAMA DE PRODUCCIÓN POR INVESTIGADOR    " << endl;
+    cout << "--------------------------------------------------" << endl;
+    
+    int maxInvCant = 0;
+    g = multilista;
+    while (g != NULL) {
+        NodoInvestigador* inv = g->investigadores;
+        while (inv != NULL) {
+            int cnt = 0;
+            NodoProducto* p = inv->productos;
+            while (p != NULL) { cnt++; p = p->sig; }
+            if (cnt > maxInvCant) maxInvCant = cnt;
+            inv = inv->sig;
+        }
+        g = g->sig;
+    }
+
+    g = multilista;
+    while (g != NULL) {
+        NodoInvestigador* inv = g->investigadores;
+        while (inv != NULL) {
+            int cnt = 0;
+            NodoProducto* p = inv->productos;
+            while (p != NULL) { cnt++; p = p->sig; }
+
+            string labelInv = inv->codigo;
+            while (labelInv.length() < 12) labelInv += " ";
+
+            cout << " " << labelInv << " | ";
+            imprimirBarraHistograma(cnt, maxInvCant);
+
+            inv = inv->sig;
+        }
+        g = g->sig;
+    }
+
+    cout << "--------------------------------------------------" << endl;
+    cout << " TOTAL PRODUCTOS ANALIZADOS: " << totalProductos << endl;
+    cout << " STATUS: Procesamiento exitoso." << endl;
     cout << "==================================================" << endl;
+
+    ofstream archivoOut("resultados_cpp.json");
+    if (archivoOut.is_open()) {
+        archivoOut << "[\n";
+        archivoOut << "  {\"categoria\": \"Artículos\", \"cantidad\": " << totalArticulos << "},\n";
+        archivoOut << "  {\"categoria\": \"Libros/Capítulos\", \"cantidad\": " << totalLibros << "},\n";
+        archivoOut << "  {\"categoria\": \"Software\", \"cantidad\": " << totalSoftware << "},\n";
+        archivoOut << "  {\"categoria\": \"Genericos\", \"cantidad\": " << totalGenericos << "}\n";
+        archivoOut << "]\n";
+        archivoOut.close();
+    }
+    
 }
 
 int main(int argc, char* argv[]) {

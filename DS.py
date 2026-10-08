@@ -7,13 +7,14 @@ from collections import deque
 import urllib.request
 from bs4 import BeautifulSoup
 from sqlalchemy import (create_engine, MetaData, Table, Column, String, Integer, ForeignKey, select, update, delete, func)
-
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
-# ==========================================
 # CONFIGURACIÓN Y PERSISTENCIA (SQLAlchemy)
-# ==========================================
+
 
 RUTA_BD = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -135,6 +136,48 @@ def agregar_producto_ml(grupo_codigo, inv_codigo, prod_codigo, nombre, categoria
 # FUNCIONES DE BASE DE DATOS Y SINCRONIZACIÓN
 # ==========================================
 
+
+def generar_reporte_pandas_gui(ventana_padre):
+    # 1. Cargar los datos desde SQLite a un DataFrame de pandas
+    with engine.connect() as conn:
+        df = pd.read_sql("SELECT * FROM productos", conn)
+
+    if df.empty:
+        messagebox.showwarning("Atención", "No hay productos registrados para analizar.")
+        return
+
+    # 2. Crear ventana emergente Tkinter
+    top = tk.Toplevel(ventana_padre)
+    top.title("Análisis Estadístico e Histogramas (Pandas + Matplotlib)")
+    top.geometry("800x600")
+    top.configure(bg="#f8fafc")
+
+    # 3. Crear figura de Matplotlib con 2 subgráficos (Histogramas/Barras)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 4), dpi=100)
+    fig.patch.set_facecolor('#f8fafc')
+
+    # Gráfico 1: Conteo por Categoría
+    conteo_cat = df['categoria'].value_counts()
+    conteo_cat.plot(kind='bar', ax=ax1, color='#0284c7', edgecolor='black')
+    ax1.set_title('Productos por Categoría', fontsize=10, fontweight='bold')
+    ax1.set_xlabel('Categoría')
+    ax1.set_ylabel('Cantidad')
+    ax1.grid(axis='y', linestyle='--', alpha=0.7)
+
+    # Gráfico 2: Histograma por Año
+    df['anio'].plot(kind='hist', ax=ax2, bins=len(df['anio'].unique()), color='#16a34a', edgecolor='black')
+    ax2.set_title('Distribución Cronológica (Años)', fontsize=10, fontweight='bold')
+    ax2.set_xlabel('Año de Publicación')
+    ax2.set_ylabel('Frecuencia')
+    ax2.grid(axis='y', linestyle='--', alpha=0.7)
+
+    plt.tight_layout()
+
+    # 4. Embeber la gráfica de Matplotlib dentro de la ventana de Tkinter
+    canvas = FigureCanvasTkAgg(fig, master=top)
+    canvas.draw()
+    canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+
 def crear_tablas():
     metadata.create_all(engine)
 
@@ -239,35 +282,64 @@ def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
 def ejecutar_procesador_cpp_gui():
     exportar_todo_a_json("datos_entrada.json")
     
-    ejecutable = "./procesador" if os.name != "nt" else "procesador.exe"
+    ejecutable = "./DS" if os.name != "nt" else "DS.exe"
     
     if not os.path.exists(ejecutable) and os.path.exists("DS.cpp"):
-        os.system("g++ -o procesador DS.cpp")
+        os.system("g++ -o DS DS.cpp")
 
     if not os.path.exists(ejecutable):
-        messagebox.showerror("Error C++", "No se encontró el ejecutable ni el archivo fuente 'DS.cpp'.")
+        messagebox.showerror("Error C++", "No se encontró el ejecutable 'DS.exe' ni el archivo fuente 'DS.cpp'.")
         return
 
     try:
-        resultado = subprocess.run([ejecutable, "datos_entrada.json"], capture_output=True, text=True)
-        salida_cpp = resultado.stdout
-        
+        # 1. Ejecutar C++ para procesar Multilista en RAM y generar 'resultados_cpp.json'
+        resultado = subprocess.run(
+            [ejecutable, "datos_entrada.json"], 
+            capture_output=True, 
+            text=True, 
+            encoding="utf-8", 
+            errors="replace"
+        )
+
+        if not os.path.exists("resultados_cpp.json"):
+            messagebox.showerror("Error C++", "C++ no generó el archivo de intercambio 'resultados_cpp.json'.")
+            return
+
+        # 2. Cargar el JSON producido por C++ dentro de un DataFrame de Pandas
+        df_resultados = pd.read_json("resultados_cpp.json")
+
+        # 3. Renderizar ventana en Tkinter con gráfico de Matplotlib/Pandas
         top = tk.Toplevel()
-        top.title("Reporte Estadístico - C++ (vía JSON)")
-        top.geometry("520x380")
-        top.configure(bg="#0f172a")
-        
-        lbl_titulo = tk.Label(top, text="RESULTADOS PROCESADOS EN C++", font=("Segoe UI", 11, "bold"), bg="#0f172a", fg="#38bdf8")
-        lbl_titulo.pack(pady=(12, 5))
+        top.title("Análisis Estadístico - C++ + Pandas Interoperabilidad")
+        top.geometry("680x480")
+        top.configure(bg="#f8fafc")
 
-        txt = tk.Text(top, wrap="word", font=("Consolas", 10), bg="#1e293b", fg="#f8fafc", insertbackground="white", bd=0, padx=10, pady=10)
-        txt.pack(fill="both", expand=True, padx=12, pady=12)
-        txt.insert(tk.END, salida_cpp)
-        txt.config(state="disabled")
+        lbl_titulo = tk.Label(top, text="RESULTADOS PROCESADOS EN C++ (GRAFICADO CON PANDAS)", font=("Segoe UI", 11, "bold"), bg="#f8fafc", fg="#0f172a")
+        lbl_titulo.pack(pady=(10, 5))
+
+        # Crear figura de Matplotlib
+        fig, ax = plt.subplots(figsize=(6, 3.5), dpi=100)
+        fig.patch.set_facecolor('#f8fafc')
+
+        # Graficar usando la integración nativa de Pandas con Matplotlib
+        bars = ax.bar(df_resultados['categoria'], df_resultados['cantidad'], color='#0284c7', edgecolor='#0f172a')
         
+        # Agregar etiquetas de valor sobre cada barra
+        ax.bar_label(bars, padding=3, fontproperties={'weight': 'bold'})
+
+        ax.set_title("Distribución de Productos por Categoría", fontsize=10, fontweight='bold', pad=10)
+        ax.set_xlabel("Categoría", fontsize=9)
+        ax.set_ylabel("Cantidad de Productos", fontsize=9)
+        ax.grid(axis='y', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+
+        # Incrustar en la ventana de Tkinter
+        canvas = FigureCanvasTkAgg(fig, master=top)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=12)
+
     except Exception as e:
-        messagebox.showerror("Error", f"Fallo al ejecutar C++: {e}")
-
+        messagebox.showerror("Error", f"Fallo al ejecutar integración C++ / Pandas: {e}")
 # ==========================================
 # MÓDULOS DE IMPORTACIÓN Y WEB SCRAPING
 # ==========================================
