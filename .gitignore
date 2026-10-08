@@ -1,8 +1,5 @@
-*.exe
-*.o
-*.dev.bak
-Makefile.win
-.db-journal
-**/pea_db.sql
 **/pea.db
-
+**/datos_scraping.csv
+**/datos_entrada.json
+**/procesador.exe
+**/.vscode
