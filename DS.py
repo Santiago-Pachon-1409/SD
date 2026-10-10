@@ -13,8 +13,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
-# CONFIGURACIÓN Y PERSISTENCIA (SQLAlchemy)
-
 
 RUTA_BD = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -63,10 +61,6 @@ productos = Table(
 )
 
 metadata.create_all(engine)
-
-# ==========================================
-# ESTRUCTURAS DE DATOS EN MEMORIA (No-POO)
-# ==========================================
 
 pila_productos = []
 cola_productos = deque()
@@ -132,10 +126,6 @@ def agregar_producto_ml(grupo_codigo, inv_codigo, prod_codigo, nombre, categoria
     nuevo_prod = crear_nodo_producto(prod_codigo, nombre, categoria, anio, validacion)
     investigador["productos"].append(nuevo_prod)
 
-# ==========================================
-# FUNCIONES DE BASE DE DATOS Y SINCRONIZACIÓN
-# ==========================================
-
 
 def generar_reporte_pandas_gui(ventana_padre):
     # 1. Cargar los datos desde SQLite a un DataFrame de pandas
@@ -173,7 +163,6 @@ def generar_reporte_pandas_gui(ventana_padre):
 
     plt.tight_layout()
 
-    # 4. Embeber la gráfica de Matplotlib dentro de la ventana de Tkinter
     canvas = FigureCanvasTkAgg(fig, master=top)
     canvas.draw()
     canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
@@ -209,12 +198,11 @@ def cargar_estructuras_guardadas():
     vaciar_multilista()
 
     with engine.connect() as conn:
-        # 1. Cargar Grupos
+
         reg_grupos = conn.execute(select(grupos)).mappings().all()
         for g in reg_grupos:
             agregar_o_buscar_grupo_ml(g["codigo"], g["nombre"], g["area"])
 
-        # 2. Cargar Investigadores
         consulta_inv = (
             select(
                 investigadores.c.codigo,
@@ -231,7 +219,6 @@ def cargar_estructuras_guardadas():
             g_cod = inv["grupo_codigo"] if inv["grupo_codigo"] else "G-001"
             agregar_o_buscar_investigador_ml(g_cod, inv["codigo"], inv["nombre"], inv["correo"])
 
-        # 3. Cargar Productos
         registros = conn.execute(select(productos)).mappings().all()
 
     for p in registros:
@@ -251,6 +238,7 @@ def cargar_estructuras_guardadas():
         )
 
 def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
+    """Exporta el 100% de los productos a JSON para C++, ignorando la vista filtrada de la pantalla"""
     with engine.connect() as conn:
         registros = conn.execute(
             select(
@@ -278,8 +266,9 @@ def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
 
     with open(ruta_salida, mode='w', encoding='utf-8') as f:
         json.dump(lista_productos, f, indent=4, ensure_ascii=False)
-
+    
 def ejecutar_procesador_cpp_gui():
+    # Exporta la totalidad de la base de datos para procesamiento global
     exportar_todo_a_json("datos_entrada.json")
     
     ejecutable = "./DS" if os.name != "nt" else "DS.exe"
@@ -292,7 +281,6 @@ def ejecutar_procesador_cpp_gui():
         return
 
     try:
-        # 1. Ejecutar C++ para procesar Multilista en RAM y generar 'resultados_cpp.json'
         resultado = subprocess.run(
             [ejecutable, "datos_entrada.json"], 
             capture_output=True, 
@@ -302,29 +290,23 @@ def ejecutar_procesador_cpp_gui():
         )
 
         if not os.path.exists("resultados_cpp.json"):
-            messagebox.showerror("Error C++", "C++ no generó el archivo de intercambio 'resultados_cpp.json'.")
+            messagebox.showerror("Error C++", "C++ no generó el archivo 'resultados_cpp.json'.")
             return
 
-        # 2. Cargar el JSON producido por C++ dentro de un DataFrame de Pandas
         df_resultados = pd.read_json("resultados_cpp.json")
 
-        # 3. Renderizar ventana en Tkinter con gráfico de Matplotlib/Pandas
         top = tk.Toplevel()
-        top.title("Análisis Estadístico - C++ + Pandas Interoperabilidad")
+        top.title("Análisis Estadístico General - C++ + Pandas")
         top.geometry("680x480")
         top.configure(bg="#f8fafc")
 
-        lbl_titulo = tk.Label(top, text="RESULTADOS PROCESADOS EN C++ (GRAFICADO CON PANDAS)", font=("Segoe UI", 11, "bold"), bg="#f8fafc", fg="#0f172a")
+        lbl_titulo = tk.Label(top, text="RESULTADOS GENERALES PROCESADOS EN C++", font=("Segoe UI", 10, "bold"), bg="#f8fafc", fg="#0f172a")
         lbl_titulo.pack(pady=(10, 5))
 
-        # Crear figura de Matplotlib
         fig, ax = plt.subplots(figsize=(6, 3.5), dpi=100)
         fig.patch.set_facecolor('#f8fafc')
 
-        # Graficar usando la integración nativa de Pandas con Matplotlib
         bars = ax.bar(df_resultados['categoria'], df_resultados['cantidad'], color='#0284c7', edgecolor='#0f172a')
-        
-        # Agregar etiquetas de valor sobre cada barra
         ax.bar_label(bars, padding=3, fontproperties={'weight': 'bold'})
 
         ax.set_title("Distribución de Productos por Categoría", fontsize=10, fontweight='bold', pad=10)
@@ -333,16 +315,12 @@ def ejecutar_procesador_cpp_gui():
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         plt.tight_layout()
 
-        # Incrustar en la ventana de Tkinter
         canvas = FigureCanvasTkAgg(fig, master=top)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=12)
 
     except Exception as e:
-        messagebox.showerror("Error", f"Fallo al ejecutar integración C++ / Pandas: {e}")
-# ==========================================
-# MÓDULOS DE IMPORTACIÓN Y WEB SCRAPING
-# ==========================================
+        messagebox.showerror("Error", f"Fallo al ejecutar C++ / Pandas: {e}")
 
 def descargar_desde_url_gui(ventana_padre):
     url = simpledialog.askstring("Web Scraping MinCiencias", "Ingrese la URL a procesar (GrupLAC/CvLAC):", parent=ventana_padre)
@@ -360,7 +338,6 @@ def descargar_desde_url_gui(ventana_padre):
         soup = BeautifulSoup(html, 'html.parser')
         filas = soup.find_all('tr')
 
-        # 1. Extracción del Nombre Real del Grupo
         g_cod = "G-001"
         g_nom = "Grupo de Investigación"
         
@@ -381,7 +358,6 @@ def descargar_desde_url_gui(ventana_padre):
         
         agregar_o_buscar_grupo_ml(g_cod, g_nom, "Sistemas y Computación")
 
-        # 2. Extracción de Integrantes Reales
         lista_investigadores = []
         mapa_investigadores = {}
         inv_contador = 1
@@ -433,7 +409,6 @@ def descargar_desde_url_gui(ventana_padre):
                     conn.execute(grupo_investigador.insert().values(grupo_codigo=g_cod, investigador_codigo=cod))
                 agregar_o_buscar_investigador_ml(g_cod, cod, nom, cor)
 
-        # 3. Extracción y Asociación de Productos
         descartar = [
             "datos básicos", "datos basicos", "año y mes de formación", "departamento - ciudad",
             "líder", "lider", "página web", "clasificación", "área de conocimiento",
@@ -564,9 +539,7 @@ def importar_csv_gui(ventana_padre):
     except Exception as e:
         messagebox.showerror("Error", f"Error al importar CSV: {e}")
 
-# ==========================================
-# FUNCIONES DE REFRESCO Y BÚSQUEDA EN TABLAS
-# ==========================================
+
 
 def refrescar_tabla_grupos(tree):
     for item in tree.get_children():
@@ -599,19 +572,29 @@ def refrescar_tabla_investigadores(tree):
         tag = "evenrow" if i % 2 == 0 else "oddrow"
         tree.insert("", "end", values=(inv["codigo"], inv["nombre"], inv["correo"], inv["grupos"] or "Sin grupo", inv["estado"]), tags=(tag,))
 
-def refrescar_tabla_productos(tree, filtro=""):
+def refrescar_tabla_productos(tree, texto_filtro="", cat_filtro="Todas", est_filtro="Todos"):
     for item in tree.get_children():
         tree.delete(item)
     
     with engine.connect() as conn:
         stmt = select(productos)
-        if filtro.strip():
-            f = f"%{filtro.strip()}%"
+        
+
+        if texto_filtro.strip():
+            f = f"%{texto_filtro.strip()}%"
             stmt = stmt.where(
                 (productos.c.codigo.like(f)) | 
                 (productos.c.nombre.like(f)) | 
                 (productos.c.categoria.like(f))
             )
+            
+
+        if cat_filtro != "Todas":
+            stmt = stmt.where(productos.c.categoria == cat_filtro)
+
+        if est_filtro != "Todos":
+            stmt = stmt.where(productos.c.estado == est_filtro)
+
         registros = conn.execute(stmt).mappings().all()
 
     for i, p in enumerate(registros):
@@ -631,23 +614,24 @@ def refrescar_arbol_multilista(tree):
             for prod in inv["productos"]:
                 tree.insert(node_inv, "end", text=f"      📄 Producto: {prod['codigo']} - {prod['nombre']}", values=(prod['codigo'], f"Cat: {prod['categoria']} ({prod['anio']})", prod['validacion']), tags=("producto",))
 
-def refrescar_todas_las_tablas():
+def refrescar_todas_las_tablas():    
     refrescar_tabla_grupos(tree_grupos)
     refrescar_tabla_investigadores(tree_inv)
-    refrescar_tabla_productos(tree_prod, ent_buscar.get() if 'ent_buscar' in globals() else "")
+    
+    t_filtro = ent_buscar.get() if 'ent_buscar' in globals() else ""
+    c_filtro = combo_cat.get() if 'combo_cat' in globals() else "Todas"
+    e_filtro = combo_est.get() if 'combo_est' in globals() else "Todos"
+    
+    refrescar_tabla_productos(tree_prod, t_filtro, c_filtro, e_filtro)
     if 'tree_multi' in globals():
         refrescar_arbol_multilista(tree_multi)
-
-# ==========================================
-# OPERACIONES DE PILA (LIFO) Y COLA (FIFO)
-# ==========================================
 
 def deshacer_ultimo_pila_gui():
     if not pila_productos:
         messagebox.showinfo("Pila Vacía", "La Cima de la Pila (LIFO) está vacía.")
         return
 
-    ultimo_codigo = pila_productos.pop() # Operación POP en Cima de Pila
+    ultimo_codigo = pila_productos.pop() 
     
     if messagebox.askyesno("Pila (LIFO) - Deshacer Registro", f"¿Desea eliminar de la BD el último producto ingresado a la Cima de la Pila: '{ultimo_codigo}'?"):
         with engine.begin() as conn:
@@ -658,7 +642,7 @@ def deshacer_ultimo_pila_gui():
         refrescar_todas_las_tablas()
         messagebox.showinfo("Éxito Pila", f"Producto '{ultimo_codigo}' deshecho correctamente desde la Cima de la Pila.")
     else:
-        pila_productos.append(ultimo_codigo) # Recomponer si cancela
+        pila_productos.append(ultimo_codigo) 
 
 def ver_estado_pila_cola_gui(root):
     top = tk.Toplevel(root)
@@ -680,10 +664,6 @@ def ver_estado_pila_cola_gui(root):
 
     txt.insert(tk.END, info)
     txt.config(state="disabled")
-
-# ==========================================
-# FORMULARIOS Y ACCIONES DE LA GUI
-# ==========================================
 
 def abrir_formulario_grupo(root):
     top = tk.Toplevel(root)
@@ -879,10 +859,6 @@ def activar_producto_gui():
         conn.execute(update(productos).where(productos.c.codigo == codigo).values(estado="Activo"))
     refrescar_todas_las_tablas()
 
-# ==========================================
-# ESTILOS Y VENTANA PRINCIPAL (Tkinter)
-# ==========================================
-
 def aplicar_estilos_gui(root):
     style = ttk.Style(root)
     style.theme_use("clam")
@@ -945,11 +921,9 @@ def iniciar_interfaz_grafica():
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True, padx=12, pady=12)
 
-    # --- Pestaña Productos ---
     frame_p = ttk.Frame(notebook)
     notebook.add(frame_p, text="Productos")
 
-    # Barra de búsqueda y filtrado
     frame_search = ttk.Frame(frame_p)
     frame_search.pack(fill="x", padx=5, pady=(5, 2))
 
@@ -976,12 +950,10 @@ def iniciar_interfaz_grafica():
     ttk.Button(btn_bar_p, text="Eliminar Producto", style="Danger.TButton", command=eliminar_producto_gui).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Web Scraping (URL)", style="Primary.TButton", command=lambda: descargar_desde_url_gui(root)).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Importar CSV", style="Primary.TButton", command=lambda: importar_csv_gui(root)).pack(side="left", padx=3)
-    
-    # Botones de demostración Pila/Cola
+
     ttk.Button(btn_bar_p, text="Deshacer (Pop Pila)", style="Danger.TButton", command=deshacer_ultimo_pila_gui).pack(side="right", padx=3)
     ttk.Button(btn_bar_p, text="Ver Pila/Cola", style="Primary.TButton", command=lambda: ver_estado_pila_cola_gui(root)).pack(side="right", padx=3)
 
-    # --- Pestaña Grupos e Investigadores ---
     frame_gi = ttk.Frame(notebook)
     notebook.add(frame_gi, text="Grupos e Investigadores")
 
@@ -1010,7 +982,6 @@ def iniciar_interfaz_grafica():
     ttk.Button(btn_bar_gi, text="Crear Grupo", style="Success.TButton", command=lambda: abrir_formulario_grupo(root)).pack(side="left", padx=4)
     ttk.Button(btn_bar_gi, text="Crear Investigador", style="Success.TButton", command=lambda: abrir_formulario_investigador(root)).pack(side="left", padx=4)
 
-    # --- Pestaña Vista Jerárquica (Multilista) ---
     frame_m = ttk.Frame(notebook)
     notebook.add(frame_m, text="Vista Multilista (Jerárquica)")
 
