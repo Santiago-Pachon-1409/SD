@@ -7,12 +7,17 @@ from collections import deque
 import urllib.request
 from bs4 import BeautifulSoup
 from sqlalchemy import (create_engine, MetaData, Table, Column, String, Integer, ForeignKey, select, update, delete, func)
-import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+# ==========================================
+# CONFIGURACIÓN Y PERSISTENCIA (SQLAlchemy)
+# ==========================================
 
 RUTA_BD = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -61,6 +66,10 @@ productos = Table(
 )
 
 metadata.create_all(engine)
+
+# ==========================================
+# ESTRUCTURAS DE DATOS EN MEMORIA (No-POO)
+# ==========================================
 
 pila_productos = []
 cola_productos = deque()
@@ -126,46 +135,9 @@ def agregar_producto_ml(grupo_codigo, inv_codigo, prod_codigo, nombre, categoria
     nuevo_prod = crear_nodo_producto(prod_codigo, nombre, categoria, anio, validacion)
     investigador["productos"].append(nuevo_prod)
 
-
-def generar_reporte_pandas_gui(ventana_padre):
-    # 1. Cargar los datos desde SQLite a un DataFrame de pandas
-    with engine.connect() as conn:
-        df = pd.read_sql("SELECT * FROM productos", conn)
-
-    if df.empty:
-        messagebox.showwarning("Atención", "No hay productos registrados para analizar.")
-        return
-
-    # 2. Crear ventana emergente Tkinter
-    top = tk.Toplevel(ventana_padre)
-    top.title("Análisis Estadístico e Histogramas (Pandas + Matplotlib)")
-    top.geometry("800x600")
-    top.configure(bg="#f8fafc")
-
-    # 3. Crear figura de Matplotlib con 2 subgráficos (Histogramas/Barras)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 4), dpi=100)
-    fig.patch.set_facecolor('#f8fafc')
-
-    # Gráfico 1: Conteo por Categoría
-    conteo_cat = df['categoria'].value_counts()
-    conteo_cat.plot(kind='bar', ax=ax1, color='#0284c7', edgecolor='black')
-    ax1.set_title('Productos por Categoría', fontsize=10, fontweight='bold')
-    ax1.set_xlabel('Categoría')
-    ax1.set_ylabel('Cantidad')
-    ax1.grid(axis='y', linestyle='--', alpha=0.7)
-
-    # Gráfico 2: Histograma por Año
-    df['anio'].plot(kind='hist', ax=ax2, bins=len(df['anio'].unique()), color='#16a34a', edgecolor='black')
-    ax2.set_title('Distribución Cronológica (Años)', fontsize=10, fontweight='bold')
-    ax2.set_xlabel('Año de Publicación')
-    ax2.set_ylabel('Frecuencia')
-    ax2.grid(axis='y', linestyle='--', alpha=0.7)
-
-    plt.tight_layout()
-
-    canvas = FigureCanvasTkAgg(fig, master=top)
-    canvas.draw()
-    canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+# ==========================================
+# FUNCIONES DE BASE DE DATOS Y SINCRONIZACIÓN
+# ==========================================
 
 def crear_tablas():
     metadata.create_all(engine)
@@ -198,7 +170,6 @@ def cargar_estructuras_guardadas():
     vaciar_multilista()
 
     with engine.connect() as conn:
-
         reg_grupos = conn.execute(select(grupos)).mappings().all()
         for g in reg_grupos:
             agregar_o_buscar_grupo_ml(g["codigo"], g["nombre"], g["area"])
@@ -238,19 +209,8 @@ def cargar_estructuras_guardadas():
         )
 
 def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
-    """Exporta el 100% de los productos a JSON para C++, ignorando la vista filtrada de la pantalla"""
     with engine.connect() as conn:
-        registros = conn.execute(
-            select(
-                productos.c.codigo,
-                productos.c.nombre,
-                productos.c.categoria,
-                productos.c.anio,
-                productos.c.validacion,
-                productos.c.grupo_codigo,
-                productos.c.investigador_codigo
-            )
-        ).mappings().all()
+        registros = conn.execute(select(productos)).mappings().all()
 
     lista_productos = []
     for r in registros:
@@ -266,61 +226,10 @@ def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
 
     with open(ruta_salida, mode='w', encoding='utf-8') as f:
         json.dump(lista_productos, f, indent=4, ensure_ascii=False)
-    
-def ejecutar_procesador_cpp_gui():
-    # Exporta la totalidad de la base de datos para procesamiento global
-    exportar_todo_a_json("datos_entrada.json")
-    
-    ejecutable = "./DS" if os.name != "nt" else "DS.exe"
-    
-    if not os.path.exists(ejecutable) and os.path.exists("DS.cpp"):
-        os.system("g++ -o DS DS.cpp")
 
-    if not os.path.exists(ejecutable):
-        messagebox.showerror("Error C++", "No se encontró el ejecutable 'DS.exe' ni el archivo fuente 'DS.cpp'.")
-        return
-
-    try:
-        resultado = subprocess.run(
-            [ejecutable, "datos_entrada.json"], 
-            capture_output=True, 
-            text=True, 
-            encoding="utf-8", 
-            errors="replace"
-        )
-
-        if not os.path.exists("resultados_cpp.json"):
-            messagebox.showerror("Error C++", "C++ no generó el archivo 'resultados_cpp.json'.")
-            return
-
-        df_resultados = pd.read_json("resultados_cpp.json")
-
-        top = tk.Toplevel()
-        top.title("Análisis Estadístico General - C++ + Pandas")
-        top.geometry("680x480")
-        top.configure(bg="#f8fafc")
-
-        lbl_titulo = tk.Label(top, text="RESULTADOS GENERALES PROCESADOS EN C++", font=("Segoe UI", 10, "bold"), bg="#f8fafc", fg="#0f172a")
-        lbl_titulo.pack(pady=(10, 5))
-
-        fig, ax = plt.subplots(figsize=(6, 3.5), dpi=100)
-        fig.patch.set_facecolor('#f8fafc')
-
-        bars = ax.bar(df_resultados['categoria'], df_resultados['cantidad'], color='#0284c7', edgecolor='#0f172a')
-        ax.bar_label(bars, padding=3, fontproperties={'weight': 'bold'})
-
-        ax.set_title("Distribución de Productos por Categoría", fontsize=10, fontweight='bold', pad=10)
-        ax.set_xlabel("Categoría", fontsize=9)
-        ax.set_ylabel("Cantidad de Productos", fontsize=9)
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
-        plt.tight_layout()
-
-        canvas = FigureCanvasTkAgg(fig, master=top)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=12)
-
-    except Exception as e:
-        messagebox.showerror("Error", f"Fallo al ejecutar C++ / Pandas: {e}")
+# ==========================================
+# MÓDULOS DE IMPORTACIÓN Y WEB SCRAPING
+# ==========================================
 
 def descargar_desde_url_gui(ventana_padre):
     url = simpledialog.askstring("Web Scraping MinCiencias", "Ingrese la URL a procesar (GrupLAC/CvLAC):", parent=ventana_padre)
@@ -539,7 +448,9 @@ def importar_csv_gui(ventana_padre):
     except Exception as e:
         messagebox.showerror("Error", f"Error al importar CSV: {e}")
 
-
+# ==========================================
+# REFRESCO Y BÚSQUEDA EN TABLAS VISUALES
+# ==========================================
 
 def refrescar_tabla_grupos(tree):
     for item in tree.get_children():
@@ -572,14 +483,14 @@ def refrescar_tabla_investigadores(tree):
         tag = "evenrow" if i % 2 == 0 else "oddrow"
         tree.insert("", "end", values=(inv["codigo"], inv["nombre"], inv["correo"], inv["grupos"] or "Sin grupo", inv["estado"]), tags=(tag,))
 
-def refrescar_tabla_productos(tree, texto_filtro="", cat_filtro="Todas", est_filtro="Todos"):
+def refrescar_tabla_productos(tree, texto_filtro="", cat_filtro="Todas", est_filtro="Todos", anio_filtro="Todos"):
+    """Filtra la visualización de la tabla aplicando búsqueda, categoría, estado y año"""
     for item in tree.get_children():
         tree.delete(item)
     
     with engine.connect() as conn:
         stmt = select(productos)
         
-
         if texto_filtro.strip():
             f = f"%{texto_filtro.strip()}%"
             stmt = stmt.where(
@@ -588,12 +499,14 @@ def refrescar_tabla_productos(tree, texto_filtro="", cat_filtro="Todas", est_fil
                 (productos.c.categoria.like(f))
             )
             
-
         if cat_filtro != "Todas":
             stmt = stmt.where(productos.c.categoria == cat_filtro)
 
         if est_filtro != "Todos":
             stmt = stmt.where(productos.c.estado == est_filtro)
+
+        if anio_filtro != "Todos":
+            stmt = stmt.where(productos.c.anio == int(anio_filtro))
 
         registros = conn.execute(stmt).mappings().all()
 
@@ -614,24 +527,69 @@ def refrescar_arbol_multilista(tree):
             for prod in inv["productos"]:
                 tree.insert(node_inv, "end", text=f"      📄 Producto: {prod['codigo']} - {prod['nombre']}", values=(prod['codigo'], f"Cat: {prod['categoria']} ({prod['anio']})", prod['validacion']), tags=("producto",))
 
-def refrescar_todas_las_tablas():    
+def refrescar_dashboard_sigiip():
+    """Actualiza los gráficos del panel de la Dashboard SIGIIP sin panel izquierdo"""
+    if 'panel_der_dash' not in globals():
+        return
+
+    for widget in panel_der_dash.winfo_children():
+        widget.destroy()
+
+    tk.Label(panel_der_dash, text="Métricas e Indicadores de Producción Científica", font=("Segoe UI", 11, "bold"), bg="#f8fafc", fg="#0f172a").pack(anchor="w", pady=(5, 10))
+
+    with engine.connect() as conn:
+        df_prod = pd.read_sql("SELECT * FROM productos", conn)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 4.5), dpi=100)
+    fig.patch.set_facecolor('#f8fafc')
+
+    if not df_prod.empty:
+        conteo_anios = df_prod['anio'].value_counts().sort_index()
+        conteo_anios.plot(kind='bar', ax=ax1, color='#0284c7', edgecolor='#0f172a', width=0.6)
+        ax1.set_title("Participación en Proyectos / Años", fontsize=10, fontweight='bold')
+        ax1.set_xlabel("Año", fontsize=9)
+        ax1.set_ylabel("Cantidad", fontsize=9)
+        ax1.grid(axis='y', linestyle='--', alpha=0.6)
+        ax1.tick_params(axis='x', rotation=0)
+
+        conteo_cat = df_prod['categoria'].value_counts()
+        colores = ['#f97316', '#0284c7', '#16a34a', '#dc2626']
+        conteo_cat.plot(kind='pie', ax=ax2, autopct='%1.1f%%', startangle=90, colors=colores[:len(conteo_cat)], wedgeprops=dict(width=0.6, edgecolor='w'))
+        ax2.set_title("Tipología de Productos Reportados", fontsize=10, fontweight='bold')
+        ax2.set_ylabel("")
+    else:
+        ax1.text(0.5, 0.5, "Sin datos de productos", ha='center', va='center')
+        ax2.text(0.5, 0.5, "Sin datos registrados", ha='center', va='center')
+
+    plt.tight_layout()
+    canvas_dash = FigureCanvasTkAgg(fig, master=panel_der_dash)
+    canvas_dash.draw()
+    canvas_dash.get_tk_widget().pack(fill="both", expand=True)
+
+def refrescar_todas_las_tablas():
     refrescar_tabla_grupos(tree_grupos)
     refrescar_tabla_investigadores(tree_inv)
     
     t_filtro = ent_buscar.get() if 'ent_buscar' in globals() else ""
     c_filtro = combo_cat.get() if 'combo_cat' in globals() else "Todas"
     e_filtro = combo_est.get() if 'combo_est' in globals() else "Todos"
+    a_filtro = combo_anio.get() if 'combo_anio' in globals() else "Todos"
     
-    refrescar_tabla_productos(tree_prod, t_filtro, c_filtro, e_filtro)
+    refrescar_tabla_productos(tree_prod, t_filtro, c_filtro, e_filtro, a_filtro)
     if 'tree_multi' in globals():
         refrescar_arbol_multilista(tree_multi)
+    refrescar_dashboard_sigiip()
+
+# ==========================================
+# OPERACIONES DE PILA (LIFO) Y COLA (FIFO)
+# ==========================================
 
 def deshacer_ultimo_pila_gui():
     if not pila_productos:
         messagebox.showinfo("Pila Vacía", "La Cima de la Pila (LIFO) está vacía.")
         return
 
-    ultimo_codigo = pila_productos.pop() 
+    ultimo_codigo = pila_productos.pop()
     
     if messagebox.askyesno("Pila (LIFO) - Deshacer Registro", f"¿Desea eliminar de la BD el último producto ingresado a la Cima de la Pila: '{ultimo_codigo}'?"):
         with engine.begin() as conn:
@@ -642,7 +600,7 @@ def deshacer_ultimo_pila_gui():
         refrescar_todas_las_tablas()
         messagebox.showinfo("Éxito Pila", f"Producto '{ultimo_codigo}' deshecho correctamente desde la Cima de la Pila.")
     else:
-        pila_productos.append(ultimo_codigo) 
+        pila_productos.append(ultimo_codigo)
 
 def ver_estado_pila_cola_gui(root):
     top = tk.Toplevel(root)
@@ -664,6 +622,10 @@ def ver_estado_pila_cola_gui(root):
 
     txt.insert(tk.END, info)
     txt.config(state="disabled")
+
+# ==========================================
+# FORMULARIOS Y ACCIONES DE LA GUI
+# ==========================================
 
 def abrir_formulario_grupo(root):
     top = tk.Toplevel(root)
@@ -859,6 +821,48 @@ def activar_producto_gui():
         conn.execute(update(productos).where(productos.c.codigo == codigo).values(estado="Activo"))
     refrescar_todas_las_tablas()
 
+def ejecutar_procesador_cpp_gui():
+    exportar_todo_a_json("datos_entrada.json")
+    
+    # Obtener la ruta absoluta de la carpeta del proyecto
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    ejecutable = os.path.join(base_dir, "DS" if os.name != "nt" else "DS.exe")
+    fuente_cpp = os.path.join(base_dir, "DS.cpp")
+    
+    # Si no existe el ejecutable pero sí el código fuente, compilar automáticamente
+    if not os.path.exists(ejecutable) and os.path.exists(fuente_cpp):
+        os.system(f"g++ -o \"{ejecutable}\" \"{fuente_cpp}\"")
+
+    if not os.path.exists(ejecutable):
+        messagebox.showerror("Error C++", f"No se encontró el ejecutable ni el archivo fuente en:\n{base_dir}")
+        return
+
+    try:
+        resultado = subprocess.run(
+            [ejecutable, os.path.join(base_dir, "datos_entrada.json")], 
+            capture_output=True, 
+            text=True, 
+            encoding="utf-8", 
+            errors="replace"
+        )
+        salida_cpp = resultado.stdout
+        
+        top = tk.Toplevel()
+        top.title("Reporte Estadístico Procedimental - C++")
+        top.geometry("520x380")
+        top.configure(bg="#0f172a")
+        
+        lbl_titulo = tk.Label(top, text="RESULTADOS PROCESADOS EN C++ (MULTILISTA EN RAM)", font=("Segoe UI", 10, "bold"), bg="#0f172a", fg="#38bdf8")
+        lbl_titulo.pack(pady=(12, 5))
+
+        txt = tk.Text(top, wrap="word", font=("Consolas", 10), bg="#1e293b", fg="#f8fafc", insertbackground="white", bd=0, padx=10, pady=10)
+        txt.pack(fill="both", expand=True, padx=12, pady=12)
+        txt.insert(tk.END, salida_cpp)
+        txt.config(state="disabled")
+        
+    except Exception as e:
+        messagebox.showerror("Error", f"Fallo al ejecutar C++: {e}")
+
 def aplicar_estilos_gui(root):
     style = ttk.Style(root)
     style.theme_use("clam")
@@ -893,7 +897,7 @@ def aplicar_estilos_gui(root):
     style.map("Danger.TButton", background=[("active", "#b91c1c")])
 
 def iniciar_interfaz_grafica():
-    global tree_grupos, tree_inv, tree_prod, tree_multi, ent_buscar
+    global tree_grupos, tree_inv, tree_prod, tree_multi, ent_buscar, combo_cat, combo_est, combo_anio, panel_der_dash
 
     crear_tablas()
     with engine.connect() as conn:
@@ -909,7 +913,7 @@ def iniciar_interfaz_grafica():
 
     root = tk.Tk()
     root.title("PEA-i - Sistema de Gestión de Investigación (UPC)")
-    root.geometry("960x640")
+    root.geometry("1100x680")
 
     aplicar_estilos_gui(root)
 
@@ -921,16 +925,38 @@ def iniciar_interfaz_grafica():
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True, padx=12, pady=12)
 
+    # --- Pestaña 1: Productos (Ahora de primera) ---
     frame_p = ttk.Frame(notebook)
     notebook.add(frame_p, text="Productos")
 
     frame_search = ttk.Frame(frame_p)
-    frame_search.pack(fill="x", padx=5, pady=(5, 2))
+    frame_search.pack(fill="x", padx=5, pady=(5, 4))
 
-    tk.Label(frame_search, text="🔍 Buscar Producto:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(0, 5))
+    tk.Label(frame_search, text="🔍 Buscar:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(2, 2))
     ent_buscar = tk.Entry(frame_search, font=("Segoe UI", 9), relief="solid", bd=1)
-    ent_buscar.pack(side="left", fill="x", expand=True, padx=5, ipady=2)
-    ent_buscar.bind("<KeyRelease>", lambda e: refrescar_tabla_productos(tree_prod, ent_buscar.get()))
+    ent_buscar.pack(side="left", fill="x", expand=True, padx=4, ipady=2)
+    ent_buscar.bind("<KeyRelease>", lambda e: refrescar_todas_las_tablas())
+
+    tk.Label(frame_search, text="Categoría:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(8, 2))
+    combo_cat = ttk.Combobox(frame_search, values=["Todas", "Artículo", "Libro / Capítulo", "Software", "Generica"], state="readonly", width=14)
+    combo_cat.current(0)
+    combo_cat.pack(side="left", padx=4)
+    combo_cat.bind("<<ComboboxSelected>>", lambda e: refrescar_todas_las_tablas())
+
+    tk.Label(frame_search, text="Año:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(8, 2))
+    with engine.connect() as conn:
+        anios_db = [str(r[0]) for r in conn.execute(select(productos.c.anio).distinct()).all() if r[0]]
+    anios_db = sorted(list(set(anios_db)))
+    combo_anio = ttk.Combobox(frame_search, values=["Todos"] + anios_db, state="readonly", width=8)
+    combo_anio.current(0)
+    combo_anio.pack(side="left", padx=4)
+    combo_anio.bind("<<ComboboxSelected>>", lambda e: refrescar_todas_las_tablas())
+
+    tk.Label(frame_search, text="Estado:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(8, 2))
+    combo_est = ttk.Combobox(frame_search, values=["Todos", "Activo", "Inactivo"], state="readonly", width=10)
+    combo_est.current(0)
+    combo_est.pack(side="left", padx=4)
+    combo_est.bind("<<ComboboxSelected>>", lambda e: refrescar_todas_las_tablas())
 
     cols_p = ("Código", "Nombre", "Categoría", "Año", "Validación", "Investigador", "Estado")
     tree_prod = ttk.Treeview(frame_p, columns=cols_p, show="headings")
@@ -954,6 +980,18 @@ def iniciar_interfaz_grafica():
     ttk.Button(btn_bar_p, text="Deshacer (Pop Pila)", style="Danger.TButton", command=deshacer_ultimo_pila_gui).pack(side="right", padx=3)
     ttk.Button(btn_bar_p, text="Ver Pila/Cola", style="Primary.TButton", command=lambda: ver_estado_pila_cola_gui(root)).pack(side="right", padx=3)
 
+    # --- Pestaña 2: Dashboard SIGIIP (Sin panel lateral izquierdo) ---
+    frame_dash_sigiip = ttk.Frame(notebook)
+    notebook.add(frame_dash_sigiip, text="Dashboard SIGIIP")
+
+    panel_der_dash = tk.Frame(frame_dash_sigiip, bg="#f8fafc")
+    panel_der_dash.pack(side="top", fill="both", expand=True, padx=10, pady=10)
+
+    btn_cpp_dash = tk.Frame(frame_dash_sigiip, bg="#f8fafc")
+    btn_cpp_dash.pack(side="bottom", fill="x", padx=10, pady=10)
+    ttk.Button(btn_cpp_dash, text="Ejecutar Motor C++ (Reporte en Consola)", style="Primary.TButton", command=ejecutar_procesador_cpp_gui).pack(anchor="center")
+
+    # --- Pestaña 3: Grupos e Investigadores ---
     frame_gi = ttk.Frame(notebook)
     notebook.add(frame_gi, text="Grupos e Investigadores")
 
@@ -983,7 +1021,7 @@ def iniciar_interfaz_grafica():
     ttk.Button(btn_bar_gi, text="Crear Investigador", style="Success.TButton", command=lambda: abrir_formulario_investigador(root)).pack(side="left", padx=4)
 
     frame_m = ttk.Frame(notebook)
-    notebook.add(frame_m, text="Vista Multilista (Jerárquica)")
+    notebook.add(frame_m, text="Vista de la relacion entre datos")
 
     lbl_m = tk.Label(frame_m, text="ESTRUCTURA JERÁRQUICA: GRUPO ➔ INVESTIGADOR ➔ PRODUCTO", font=("Segoe UI", 10, "bold"), bg="#f8fafc", fg="#0f172a")
     lbl_m.pack(anchor="w", padx=5, pady=(8, 4))
@@ -1005,16 +1043,6 @@ def iniciar_interfaz_grafica():
     tree_multi.tag_configure("producto", font=("Segoe UI", 9), foreground="#334155")
 
     tree_multi.pack(fill="both", expand=True, padx=5, pady=5)
-
-    # --- Pestaña C++ ---
-    frame_dash = ttk.Frame(notebook)
-    notebook.add(frame_dash, text="Reporte C++")
-
-    lbl_d = tk.Label(frame_dash, text="PROCESAMIENTO DE ESTADÍSTICAS EN C++", font=("Segoe UI", 11, "bold"), bg="#f8fafc", fg="#0f172a")
-    lbl_d.pack(pady=(25, 5))
-    lbl_sub = tk.Label(frame_dash, text="Genera el archivo de intercambio JSON y ejecuta el motor en C++.", font=("Segoe UI", 9), bg="#f8fafc", fg="#64748b")
-    lbl_sub.pack(pady=(0, 15))
-    ttk.Button(frame_dash, text="Ejecutar Análisis y Mostrar Reporte (C++)", style="Primary.TButton", command=ejecutar_procesador_cpp_gui).pack(pady=10)
 
     refrescar_todas_las_tablas()
 

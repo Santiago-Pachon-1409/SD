@@ -4,13 +4,9 @@
 #include <sstream>
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
 
 using namespace std;
-
-// =========================================================================
-// ESTRUCTURAS PROCEDIMENTALES (MULTILISTA: GRUPO -> INVESTIGADOR -> PRODUCTO)
-// RESTRICCIÓN NO-POO: Uso exclusivo de 'struct' C-style y punteros.
-// =========================================================================
 
 struct NodoProducto {
     char codigo[50];
@@ -31,11 +27,6 @@ struct NodoGrupo {
     char codigo[50];
     NodoInvestigador* investigadores;
     NodoGrupo* sig;
-};
-
-struct ConteoAnio {
-    int anio;
-    int cantidad;
 };
 
 // =========================================================================
@@ -113,7 +104,7 @@ void liberarMultilista(NodoGrupo* cabezaGrupo) {
 }
 
 // =========================================================================
-// PARSER PROCEDIMENTAL DE JSON (Sin librerías externas)
+// PARSER PROCEDIMENTAL DE JSON
 // =========================================================================
 
 string extraerValor(const string& bloque, const string& clave) {
@@ -201,11 +192,6 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
     int totalArticulos = 0, totalLibros = 0, totalSoftware = 0, totalGenericos = 0;
     int totalProductos = 0;
 
-    // Arreglo procedimental para conteo por año
-    ConteoAniosLista:
-    ConteoAnio conteoAnios[100];
-    int numAnios = 0;
-
     NodoGrupo* g = multilista;
     while (g != NULL) {
         NodoInvestigador* inv = g->investigadores;
@@ -220,21 +206,6 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
                 else if (c.find("Software") != string::npos) totalSoftware++;
                 else totalGenericos++;
 
-                if (p->anio > 0) {
-                    bool encontrado = false;
-                    for (int i = 0; i < numAnios; i++) {
-                        if (conteoAnios[i].anio == p->anio) {
-                            conteoAnios[i].cantidad++;
-                            encontrado = true;
-                            break;
-                        }
-                    }
-                    if (!encontrado && numAnios < 100) {
-                        conteoAnios[numAnios].anio = p->anio;
-                        conteoAnios[numAnios].cantidad = 1;
-                        numAnios++;
-                    }
-                }
                 p = p->sig;
             }
             inv = inv->sig;
@@ -242,18 +213,17 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
         g = g->sig;
     }
 
-    // Ordenar años procedimentalmente (Bubble Sort)
-    for (int i = 0; i < numAnios - 1; i++) {
-        for (int j = 0; j < numAnios - i - 1; j++) {
-            if (conteoAnios[j].anio > conteoAnios[j + 1].anio) {
-                ConteoAnio temp = conteoAnios[j];
-                conteoAnios[j] = conteoAnios[j + 1];
-                conteoAnios[j + 1] = temp;
-            }
-        }
+  int maxCat = totalArticulos;
+  
+    if (totalLibros > maxCat) {
+        maxCat = totalLibros;
     }
-
-    int maxCat = max(max(totalArticulos, totalLibros), max(totalSoftware, totalGenericos));
+    if (totalSoftware > maxCat) {
+        maxCat = totalSoftware;
+    }
+    if (totalGenericos > maxCat) {
+        maxCat = totalGenericos;
+    }
 
     cout << "==================================================" << endl;
     cout << "   REPORTE ESTADÍSTICO CON HISTOGRAMAS (C++)      " << endl;
@@ -272,30 +242,10 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
     cout << endl;
 
     // --------------------------------------------------
-    // HISTOGRAMA 2: POR AÑO DE PUBLICACIÓN
+    // HISTOGRAMA 2: POR INVESTIGADOR
     // --------------------------------------------------
     cout << "--------------------------------------------------" << endl;
-    cout << " 2. HISTOGRAMA CRONOLÓGICO POR AÑO                " << endl;
-    cout << "--------------------------------------------------" << endl;
-    if (numAnios == 0) {
-        cout << " [Sin datos de años para graficar]" << endl;
-    } else {
-        int maxAnioCant = 0;
-        for (int i = 0; i < numAnios; i++) {
-            if (conteoAnios[i].cantidad > maxAnioCant) maxAnioCant = conteoAnios[i].cantidad;
-        }
-        for (int i = 0; i < numAnios; i++) {
-            cout << " " << conteoAnios[i].anio << "         | ";
-            imprimirBarraHistograma(conteoAnios[i].cantidad, maxAnioCant);
-        }
-    }
-    cout << endl;
-
-    // --------------------------------------------------
-    // HISTOGRAMA 3: POR INVESTIGADOR
-    // --------------------------------------------------
-    cout << "--------------------------------------------------" << endl;
-    cout << " 3. HISTOGRAMA DE PRODUCCIÓN POR INVESTIGADOR    " << endl;
+    cout << " 2. HISTOGRAMA DE PRODUCCIÓN POR INVESTIGADOR    " << endl;
     cout << "--------------------------------------------------" << endl;
     
     int maxInvCant = 0;
@@ -331,11 +281,7 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
         g = g->sig;
     }
 
-    cout << "--------------------------------------------------" << endl;
-    cout << " TOTAL PRODUCTOS ANALIZADOS: " << totalProductos << endl;
-    cout << " STATUS: Procesamiento exitoso." << endl;
-    cout << "==================================================" << endl;
-
+    // Exportación a JSON para Pandas
     ofstream archivoOut("resultados_cpp.json");
     if (archivoOut.is_open()) {
         archivoOut << "[\n";
@@ -346,7 +292,11 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
         archivoOut << "]\n";
         archivoOut.close();
     }
-    
+
+    cout << "--------------------------------------------------" << endl;
+    cout << " TOTAL PRODUCTOS ANALIZADOS: " << totalProductos << endl;
+    cout << " STATUS: Procesamiento exitoso." << endl;
+    cout << "==================================================" << endl;
 }
 
 int main(int argc, char* argv[]) {
