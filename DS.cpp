@@ -8,6 +8,11 @@
 
 using namespace std;
 
+// =========================================================================
+// ARQUITECTURA C++ - MOTOR DE DATOS PROCEDIMENTAL (SIN POO)
+// Multilista enlazada dinámica: Grupo -> Investigador -> Producto
+// =========================================================================
+
 struct NodoProducto {
     char codigo[50];
     char nombre[150];
@@ -29,21 +34,14 @@ struct NodoGrupo {
     NodoGrupo* sig;
 };
 
-// =========================================================================
-// FUNCIONES PROCEDIMENTALES DE MANEJO DE LA MULTILISTA
-// =========================================================================
-
 NodoGrupo* buscarOAgregarGrupo(NodoGrupo** cabeza, const char* g_cod) {
     NodoGrupo* act = *cabeza;
     while (act != NULL) {
-        if (strcmp(act->codigo, g_cod) == 0) {
-            return act;
-        }
+        if (strcmp(act->codigo, g_cod) == 0) return act;
         act = act->sig;
     }
     NodoGrupo* nuevo = new NodoGrupo();
-    strncpy(nuevo->codigo, g_cod, 49);
-    nuevo->codigo[49] = '\0';
+    strncpy(nuevo->codigo, g_cod, 49); nuevo->codigo[49] = '\0';
     nuevo->investigadores = NULL;
     nuevo->sig = *cabeza;
     *cabeza = nuevo;
@@ -53,14 +51,11 @@ NodoGrupo* buscarOAgregarGrupo(NodoGrupo** cabeza, const char* g_cod) {
 NodoInvestigador* buscarOAgregarInvestigador(NodoInvestigador** cabeza, const char* inv_cod) {
     NodoInvestigador* act = *cabeza;
     while (act != NULL) {
-        if (strcmp(act->codigo, inv_cod) == 0) {
-            return act;
-        }
+        if (strcmp(act->codigo, inv_cod) == 0) return act;
         act = act->sig;
     }
     NodoInvestigador* nuevo = new NodoInvestigador();
-    strncpy(nuevo->codigo, inv_cod, 49);
-    nuevo->codigo[49] = '\0';
+    strncpy(nuevo->codigo, inv_cod, 49); nuevo->codigo[49] = '\0';
     nuevo->productos = NULL;
     nuevo->sig = *cabeza;
     *cabeza = nuevo;
@@ -103,31 +98,19 @@ void liberarMultilista(NodoGrupo* cabezaGrupo) {
     }
 }
 
-// =========================================================================
-// PARSER PROCEDIMENTAL DE JSON
-// =========================================================================
-
 string extraerValor(const string& bloque, const string& clave) {
     size_t posClave = bloque.find("\"" + clave + "\"");
     if (posClave == string::npos) return "";
-
     size_t posDosPuntos = bloque.find(":", posClave);
     if (posDosPuntos == string::npos) return "";
-
     size_t inicio = posDosPuntos + 1;
-    while (inicio < bloque.size() && (bloque[inicio] == ' ' || bloque[inicio] == '\"')) {
-        inicio++;
-    }
-
+    while (inicio < bloque.size() && (bloque[inicio] == ' ' || bloque[inicio] == '\"')) inicio++;
     size_t fin = inicio;
     if (bloque[posDosPuntos + 1] == ' ' && bloque[posDosPuntos + 2] == '\"') {
         fin = bloque.find("\"", inicio);
     } else {
-        while (fin < bloque.size() && (isdigit(bloque[fin]) || bloque[fin] == '-')) {
-            fin++;
-        }
+        while (fin < bloque.size() && (isdigit(bloque[fin]) || bloque[fin] == '-')) fin++;
     }
-
     if (fin == string::npos) return "";
     return bloque.substr(inicio, fin - inicio);
 }
@@ -138,7 +121,6 @@ void cargarJSONEnMultilista(const char* rutaArchivo, NodoGrupo** multilista) {
         cout << "[Error C++] No se pudo abrir el archivo de entrada JSON: " << rutaArchivo << endl;
         return;
     }
-
     string contenido((istreambuf_iterator<char>(archivo)), istreambuf_iterator<char>());
     archivo.close();
 
@@ -146,7 +128,6 @@ void cargarJSONEnMultilista(const char* rutaArchivo, NodoGrupo** multilista) {
     while ((pos = contenido.find('{', pos)) != string::npos) {
         size_t finObj = contenido.find('}', pos);
         if (finObj == string::npos) break;
-
         string bloque = contenido.substr(pos, finObj - pos + 1);
 
         string cod = extraerValor(bloque, "codigo");
@@ -165,28 +146,16 @@ void cargarJSONEnMultilista(const char* rutaArchivo, NodoGrupo** multilista) {
             agregarProductoML(multilista, g_cod.c_str(), inv_cod.c_str(), 
                               cod.c_str(), nom.c_str(), cat.c_str(), anio, val.c_str());
         }
-
         pos = finObj + 1;
     }
 }
 
-// =========================================================================
-// RENDERIZADO DE HISTOGRAMAS EN FORMATO ASCII
-// =========================================================================
-
 void imprimirBarraHistograma(int valor, int maxValor, int anchoMax = 20) {
     int barras = (maxValor > 0) ? (valor * anchoMax / maxValor) : 0;
     if (valor > 0 && barras == 0) barras = 1;
-
-    for (int i = 0; i < barras; i++) {
-        cout << "█";
-    }
+    for (int i = 0; i < barras; i++) cout << "█";
     cout << " (" << valor << ")" << endl;
 }
-
-// =========================================================================
-// CÁLCULO ESTADÍSTICO Y GENERACIÓN DE REPORTES
-// =========================================================================
 
 void generarReporteEstadistico(NodoGrupo* multilista) {
     int totalArticulos = 0, totalLibros = 0, totalSoftware = 0, totalGenericos = 0;
@@ -199,13 +168,11 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
             NodoProducto* p = inv->productos;
             while (p != NULL) {
                 totalProductos++;
-                
                 string c = p->categoria;
                 if (c.find("Artículo") != string::npos || c.find("Articulo") != string::npos) totalArticulos++;
                 else if (c.find("Libro") != string::npos || c.find("Capítulo") != string::npos) totalLibros++;
                 else if (c.find("Software") != string::npos) totalSoftware++;
                 else totalGenericos++;
-
                 p = p->sig;
             }
             inv = inv->sig;
@@ -213,25 +180,15 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
         g = g->sig;
     }
 
-  int maxCat = totalArticulos;
-  
-    if (totalLibros > maxCat) {
-        maxCat = totalLibros;
-    }
-    if (totalSoftware > maxCat) {
-        maxCat = totalSoftware;
-    }
-    if (totalGenericos > maxCat) {
-        maxCat = totalGenericos;
-    }
+    int maxCat = totalArticulos;
+    if (totalLibros > maxCat) maxCat = totalLibros;
+    if (totalSoftware > maxCat) maxCat = totalSoftware;
+    if (totalGenericos > maxCat) maxCat = totalGenericos;
 
     cout << "==================================================" << endl;
     cout << "   REPORTE ESTADÍSTICO CON HISTOGRAMAS (C++)      " << endl;
     cout << "==================================================" << endl << endl;
 
-    // --------------------------------------------------
-    // HISTOGRAMA 1: POR CATEGORÍA
-    // --------------------------------------------------
     cout << "--------------------------------------------------" << endl;
     cout << " 1. HISTOGRAMA DE PRODUCTOS POR CATEGORÍA         " << endl;
     cout << "--------------------------------------------------" << endl;
@@ -241,9 +198,6 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
     cout << " Otr/Genérico | "; imprimirBarraHistograma(totalGenericos, maxCat);
     cout << endl;
 
-    // --------------------------------------------------
-    // HISTOGRAMA 2: POR INVESTIGADOR
-    // --------------------------------------------------
     cout << "--------------------------------------------------" << endl;
     cout << " 2. HISTOGRAMA DE PRODUCCIÓN POR INVESTIGADOR    " << endl;
     cout << "--------------------------------------------------" << endl;
@@ -272,25 +226,11 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
 
             string labelInv = inv->codigo;
             while (labelInv.length() < 12) labelInv += " ";
-
             cout << " " << labelInv << " | ";
             imprimirBarraHistograma(cnt, maxInvCant);
-
             inv = inv->sig;
         }
         g = g->sig;
-    }
-
-    // Exportación a JSON para Pandas
-    ofstream archivoOut("resultados_cpp.json");
-    if (archivoOut.is_open()) {
-        archivoOut << "[\n";
-        archivoOut << "  {\"categoria\": \"Artículos\", \"cantidad\": " << totalArticulos << "},\n";
-        archivoOut << "  {\"categoria\": \"Libros/Capítulos\", \"cantidad\": " << totalLibros << "},\n";
-        archivoOut << "  {\"categoria\": \"Software\", \"cantidad\": " << totalSoftware << "},\n";
-        archivoOut << "  {\"categoria\": \"Genericos\", \"cantidad\": " << totalGenericos << "}\n";
-        archivoOut << "]\n";
-        archivoOut.close();
     }
 
     cout << "--------------------------------------------------" << endl;
@@ -300,11 +240,7 @@ void generarReporteEstadistico(NodoGrupo* multilista) {
 }
 
 int main(int argc, char* argv[]) {
-    const char* rutaJSON = "datos_entrada.json";
-    if (argc > 1) {
-        rutaJSON = argv[1];
-    }
-
+    const char* rutaJSON = (argc > 1) ? argv[1] : "datos_entrada.json";
     NodoGrupo* multilista = NULL;
 
     cargarJSONEnMultilista(rutaJSON, &multilista);
