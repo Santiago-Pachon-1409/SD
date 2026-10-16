@@ -14,10 +14,9 @@ from tkinter import ttk, messagebox, simpledialog
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from datetime import datetime
+import math
 
-# =========================================================================
-# ARQUITECTURA PYTHON - CAPA DE PERSISTENCIA Y PRESENTACIÓN (GUI & ANALÍTICA)
-# =========================================================================
 
 RUTA_BD = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -67,7 +66,146 @@ productos = Table(
 
 metadata.create_all(engine)
 
-# Estructuras Auxiliares en Memoria (Pila LIFO, Cola FIFO, Multilista)
+
+def validar_requisitos_existencia_minciencias(grupo_dict: dict) -> tuple[bool, str]:
+    """
+    Valida el Capítulo II (Numeral 2.1.1) del modelo Minciencias 2024.
+    Criterios: Mínimo 2 integrantes, >=1 año de existencia, >=1 proyecto en ejecución.
+    """
+    integrantes = grupo_dict.get("num_integrantes", 0)
+    edad_anos = grupo_dict.get("edad_anos", 1)
+    proyectos_ejecucion = grupo_dict.get("proyectos_ejecucion", 1)
+    
+    if integrantes < 2:
+        return False, f"Incumple Requisito: El grupo cuenta con {integrantes} integrante(s) (Mínimo requerido: 2)[cite: 51]."
+    if edad_anos < 1:
+        return False, f"Incumple Requisito: Edad del grupo de {edad_anos} año(s) (Mínimo requerido: 1)[cite: 51]."
+    if proyectos_ejecucion < 1:
+        return False, "Incumple Requisito: No registra proyectos de I+D+i en ejecución (Mínimo: 1)[cite: 51]."
+        
+    return True, "Cumple con los requisitos de existencia del Modelo Minciencias 2024[cite: 51]."
+
+def filtrar_por_ventana_observacion_minciencias(productos_lista: list, tipo_producto: str) -> list:
+    """
+    Filtra los productos según las Ventanas de Observación oficiales (Tabla 5 - Minciencias 2024):
+    - Artículos A1, A2, B, C, Libros de investigación: 7 años
+    - Artículos D y productos generales: 5 años
+    - Patentes, Variedades vegetales, AAD: 10 años
+    """
+    anho_actual = datetime.now().year
+    filtrados = []
+
+    for p in productos_lista:
+        anho_pub = p.get("anio", anho_actual)
+        diff = anho_actual - anho_pub
+        
+        if tipo_producto in ["A1", "A2", "B", "C", "Libro_Investigacion"] and diff <= 7:
+            filtrados.append(p)
+        elif tipo_producto in ["D", "General"] and diff <= 5:
+            filtrados.append(p)
+        elif tipo_producto in ["Patente", "AAD", "Variedad_Vegetal"] and diff <= 10:
+            filtrados.append(p)
+        elif tipo_producto == "Todas":
+            if diff <= 7:
+                filtrados.append(p)
+                
+    return filtrados
+
+def calcular_itp_minciencias(num_productos: int, periodo_observacion: int) -> float:
+    """
+    Calcula el indicador de productos (I_TP) aplicando la fórmula logarítmica oficial:
+    lambda = ln((Productos / Periodo) + 1)
+    """
+    if periodo_observacion <= 0:
+        return 0.0
+    valor = (num_productos / periodo_observacion) + 1
+    return math.log(valor)
+
+def abrir_reporte_minciencias_gui(root, grupo_codigo="G-001"):
+    """
+    Genera y muestra una ventana emergente con la evaluación oficial Minciencias 2024 del grupo.
+    Incluye manejo de excepciones para evitar pantallas en blanco.
+    """
+    try:
+        with engine.connect() as conn:
+            g_info = conn.execute(select(grupos).where(grupos.c.codigo == grupo_codigo)).mappings().first()
+            num_inv = conn.execute(select(func.count()).select_from(grupo_investigador).where(grupo_investigador.c.grupo_codigo == grupo_codigo)).scalar()
+            prods_grupo = conn.execute(select(productos).where(productos.c.grupo_codigo == grupo_codigo)).mappings().all()
+
+        if not g_info:
+            messagebox.showwarning("Atención", f"No se encontró el grupo '{grupo_codigo}' en la base de datos.")
+            return
+
+        edad_texto = simpledialog.askstring(
+            "Evaluación del grupo", "¿Cuántos años de existencia tiene el grupo?",
+            parent=root
+        )
+        if edad_texto is None:
+            return
+        proyectos_texto = simpledialog.askstring(
+            "Evaluación del grupo", "¿Cuántos proyectos tiene en ejecución?",
+            parent=root
+        )
+        if proyectos_texto is None:
+            return
+        try:
+            edad_grupo = int(edad_texto)
+            proyectos_activos = int(proyectos_texto)
+            if edad_grupo < 0 or proyectos_activos < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Datos inválidos", "La edad y los proyectos deben ser números enteros no negativos.", parent=root)
+            return
+
+        datos_evaluacion = {
+            "nombre": g_info["nombre"],
+            "num_integrantes": num_inv if num_inv is not None else 0,
+            "edad_anos": edad_grupo,
+            "proyectos_ejecucion": proyectos_activos
+        }
+
+        cumple, mensaje_val = validar_requisitos_existencia_minciencias(datos_evaluacion)
+        
+        lista_prods_dict = [dict(p) for p in prods_grupo]
+        prods_en_ventana = filtrar_por_ventana_observacion_minciencias(lista_prods_dict, "Todas")
+        itp_val = calcular_itp_minciencias(len(prods_en_ventana), periodo_observacion=7)
+
+        top = tk.Toplevel(root)
+        top.title(f"Evaluación Minciencias 2024 - {g_info['nombre']}")
+        top.geometry("580x460")
+        top.configure(bg="#0f172a")
+
+        tk.Label(top, text="EVALUACIÓN OFICIAL MODELO MINCIENCIAS 2024", font=("Segoe UI", 11, "bold"), bg="#0f172a", fg="#38bdf8").pack(pady=(12, 6))
+
+        txt = tk.Text(top, wrap="word", font=("Consolas", 10), bg="#1e293b", fg="#f8fafc", bd=0, padx=12, pady=12)
+        txt.pack(fill="both", expand=True, padx=12, pady=10)
+
+        reporte_texto = f"""=== DATOS GENERALES DEL GRUPO ===
+• Código: {g_info['codigo']}
+• Nombre: {g_info['nombre']}
+• Área: {g_info['area']}
+• Integrantes Activos en BD: {datos_evaluacion['num_integrantes']}
+
+=== 1. VALIDACIÓN DE EXISTENCIA (Cap. II, Num. 2.1.1) ===
+Estado: {"[ CUMPLE ]" if cumple else "[ NO CUMPLE ]"}
+Detalle: {mensaje_val}
+
+=== 2. VENTANA DE OBSERVACIÓN Y PRODUCTOS ===
+• Total productos registrados: {len(prods_grupo)}
+• Productos en ventana válida (<= 7 años): {len(prods_en_ventana)}
+
+=== 3. INDICADOR DE PRODUCTOS (I_TP) ===
+• Fórmula oficial: lambda = ln((Productos / Periodo) + 1)
+• Periodo de observación base: 7 años
+• Resultado I_TP calculado: {itp_val:.4f}
+"""
+        txt.insert("1.0", reporte_texto)
+        txt.config(state="disabled")
+
+    except Exception as e:
+        messagebox.showerror("Error de Evaluación", f"Ocurrió un error al generar el reporte:\n{e}", parent=root)
+
+
 pila_productos = []
 cola_productos = deque()
 multilista_grupos = []
@@ -193,6 +331,7 @@ def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
             "categoria": r["categoria"],
             "anio": r["anio"],
             "validacion": r["validacion"],
+            "estado": r["estado"],
             "grupo_codigo": r["grupo_codigo"] if r["grupo_codigo"] else "G-001",
             "investigador_codigo": r["investigador_codigo"] if r["investigador_codigo"] else "INV-001"
         })
@@ -297,7 +436,6 @@ def descargar_desde_url_gui(ventana_padre):
 
                 codigo_prod = f"PROD-WEB-{contador_prod:03d}"
 
-                # ASIGNACIÓN ESTRICTA: Solo asigna si múltiples partes del nombre del investigador aparecen en el texto.
                 inv_asociado_cod = lista_investigadores[0][0]
                 for nom_inv, cod_inv in mapa_investigadores.items():
                     partes_nombre = [p for p in nom_inv.lower().split() if len(p) > 3]
@@ -401,9 +539,16 @@ def refrescar_tabla_productos(tree, texto_filtro="", cat_filtro="Todas", est_fil
         if texto_filtro.strip():
             f = f"%{texto_filtro.strip()}%"
             stmt = stmt.where((productos.c.codigo.like(f)) | (productos.c.nombre.like(f)) | (productos.c.categoria.like(f)))
-        if cat_filtro != "Todas": stmt = stmt.where(productos.c.categoria == cat_filtro)
-        if est_filtro != "Todos": stmt = stmt.where(productos.c.estado == est_filtro)
-        if anio_filtro != "Todos": stmt = stmt.where(productos.c.anio == int(anio_filtro))
+        if cat_filtro != "Todas": 
+            stmt = stmt.where(productos.c.categoria == cat_filtro)
+        if est_filtro != "Todos": 
+            stmt = stmt.where(productos.c.estado == est_filtro)
+        if anio_filtro.strip() and anio_filtro.strip().lower() != "todos":
+            try:
+                stmt = stmt.where(productos.c.anio == int(anio_filtro.strip()))
+            except ValueError:
+                pass
+
         registros = conn.execute(stmt).mappings().all()
     for i, p in enumerate(registros):
         tree.insert("", "end", values=(p["codigo"], p["nombre"], p["categoria"], p["anio"], p["validacion"], p["investigador_codigo"], p["estado"]), tags=("evenrow" if i%2==0 else "oddrow",))
@@ -454,7 +599,13 @@ def refrescar_dashboard_sigiip():
 def refrescar_todas_las_tablas():
     refrescar_tabla_grupos(tree_grupos)
     refrescar_tabla_investigadores(tree_inv)
-    refrescar_tabla_productos(tree_prod, ent_buscar.get() if 'ent_buscar' in globals() else "", combo_cat.get() if 'combo_cat' in globals() else "Todas", combo_est.get() if 'combo_est' in globals() else "Todos", combo_anio.get() if 'combo_anio' in globals() else "Todos")
+    refrescar_tabla_productos(
+        tree_prod, 
+        ent_buscar.get() if 'ent_buscar' in globals() else "", 
+        combo_cat.get() if 'combo_cat' in globals() else "Todas", 
+        combo_est.get() if 'combo_est' in globals() else "Todos", 
+        ent_anio.get() if 'ent_anio' in globals() else "Todos"
+    )
     if 'tree_multi' in globals(): refrescar_arbol_multilista(tree_multi)
     refrescar_dashboard_sigiip()
 
@@ -514,9 +665,14 @@ def abrir_formulario_producto(root):
             messagebox.showwarning("Atención", "Todos los campos son requeridos.", parent=top); return
         if buscar_producto(c):
             messagebox.showerror("Error", "El producto ya existe.", parent=top); return
+        investigador = buscar_investigador(inv_cod)
+        if not investigador:
+            messagebox.showerror("Error", "El investigador indicado no existe.", parent=top); return
         with engine.connect() as conn:
             g_cod = conn.execute(select(grupo_investigador.c.grupo_codigo).where(grupo_investigador.c.investigador_codigo == inv_cod)).scalars().first()
-        g_final = g_cod if g_cod else "G-001"
+        g_final = g_cod or "G-001"
+        if not buscar_grupo(g_final):
+            messagebox.showerror("Error", "El investigador debe estar asociado a un grupo existente.", parent=top); return
         with engine.begin() as conn:
             conn.execute(productos.insert().values(codigo=c, nombre=n, categoria=cat, anio=a, validacion=val, estado="Activo", investigador_codigo=inv_cod, grupo_codigo=g_final))
         pila_productos.append(c); cola_productos.append(c)
@@ -551,36 +707,212 @@ def activar_producto_gui():
     refrescar_todas_las_tablas()
 
 def ejecutar_procesador_cpp_gui():
-    exportar_todo_a_json("datos_entrada.json")
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    ejecutable = os.path.join(base_dir, "DS" if os.name != "nt" else "DS.exe")
+    ruta_json = os.path.join(base_dir, "datos_entrada.json")
     fuente_cpp = os.path.join(base_dir, "DS.cpp")
-    
-    if not os.path.exists(ejecutable) and os.path.exists(fuente_cpp):
-        os.system(f"g++ -o \"{ejecutable}\" \"{fuente_cpp}\"")
+    ejecutable = os.path.join(base_dir, "DS.exe" if os.name == "nt" else "DS")
+
+    exportar_todo_a_json(ruta_json)
 
     if not os.path.exists(ejecutable):
-        messagebox.showerror("Error C++", f"No se encontró el ejecutable en:\n{base_dir}")
-        return
+        compilador = "g++"
+        try:
+            compilacion = subprocess.run(
+                [compilador, "-std=c++17", fuente_cpp, "-o", ejecutable],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=base_dir
+            )
+        except FileNotFoundError:
+            messagebox.showerror("Compilador no encontrado", "Instala un compilador C++ (g++) y agrégalo al PATH.")
+            return
+        if compilacion.returncode != 0:
+            messagebox.showerror("Error de compilación", compilacion.stderr or compilacion.stdout)
+            return
 
     try:
-        resultado = subprocess.run([ejecutable, os.path.join(base_dir, "datos_entrada.json")], capture_output=True, text=True, encoding="utf-8", errors="replace")
-        salida_cpp = resultado.stdout
-        
+        resultado = subprocess.run(
+            [ejecutable, ruta_json], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", cwd=base_dir, timeout=30
+        )
+        if resultado.returncode != 0:
+            messagebox.showerror("Error C++", resultado.stderr or resultado.stdout or "El proceso C++ terminó con error.")
+            return
+
         top = tk.Toplevel()
-        top.title("Reporte Estadístico - Motor Procedimental C++")
-        top.geometry("520x380")
+        top.title("Reporte estadístico - Motor C++")
+        top.geometry("650x460")
         top.configure(bg="#0f172a")
-        tk.Label(top, text="RESULTADOS PROCESADOS EN C++ (MULTILISTA EN RAM)", font=("Segoe UI", 10, "bold"), bg="#0f172a", fg="#38bdf8").pack(pady=(12, 5))
+        tk.Label(top, text="RESULTADOS PROCESADOS EN C++", font=("Segoe UI", 10, "bold"), bg="#0f172a", fg="#38bdf8").pack(pady=(12, 5))
         txt = tk.Text(top, wrap="word", font=("Consolas", 10), bg="#1e293b", fg="#f8fafc", bd=0, padx=10, pady=10)
         txt.pack(fill="both", expand=True, padx=12, pady=12)
-        txt.insert(tk.END, salida_cpp)
+        txt.insert(tk.END, resultado.stdout)
         txt.config(state="disabled")
+    except subprocess.TimeoutExpired:
+        messagebox.showerror("Tiempo agotado", "El proceso C++ tardó demasiado en responder.")
     except Exception as e:
-        messagebox.showerror("Error", f"Fallo en ejecución C++: {e}")
+        messagebox.showerror("Error", f"Fallo en la interoperabilidad Python-C++: {e}")
+
+
+def gestionar_grupo_gui(accion):
+    seleccionado = tree_grupos.selection()
+    registro = None
+    if accion != "crear":
+        if not seleccionado:
+            messagebox.showwarning("Selección", "Seleccione un grupo.")
+            return
+        codigo = tree_grupos.item(seleccionado[0])["values"][0]
+        registro = buscar_grupo(codigo)
+        if not registro:
+            messagebox.showerror("Error", "No se encontró el grupo seleccionado.")
+            return
+
+    if accion == "eliminar":
+        if not messagebox.askyesno("Confirmar", f"¿Eliminar el grupo {registro['codigo']} y sus relaciones? "):
+            return
+        with engine.begin() as conn:
+            codigos_inv = conn.execute(select(grupo_investigador.c.investigador_codigo).where(grupo_investigador.c.grupo_codigo == registro["codigo"])).scalars().all()
+            conn.execute(delete(productos).where(productos.c.grupo_codigo == registro["codigo"]))
+            conn.execute(delete(grupo_investigador).where(grupo_investigador.c.grupo_codigo == registro["codigo"]))
+            conn.execute(delete(grupos).where(grupos.c.codigo == registro["codigo"]))
+            for cod_inv in codigos_inv:
+                pertenece_a_otro = conn.execute(select(grupo_investigador.c.grupo_codigo).where(grupo_investigador.c.investigador_codigo == cod_inv)).first()
+                tiene_productos = conn.execute(select(productos.c.codigo).where(productos.c.investigador_codigo == cod_inv)).first()
+                if not pertenece_a_otro and not tiene_productos:
+                    conn.execute(delete(investigadores).where(investigadores.c.codigo == cod_inv))
+        cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
+        return
+
+    if accion == "desactivar":
+        with engine.begin() as conn:
+            conn.execute(update(grupos).where(grupos.c.codigo == registro["codigo"]).values(estado="Inactivo"))
+        cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
+        return
+
+    codigo = simpledialog.askstring("Grupo", "Código:", initialvalue=registro["codigo"] if registro else "", parent=root)
+    if not codigo: return
+    nombre = simpledialog.askstring("Grupo", "Nombre:", initialvalue=registro["nombre"] if registro else "", parent=root)
+    if not nombre: return
+    area = simpledialog.askstring("Grupo", "Área:", initialvalue=registro["area"] if registro else "Ingeniería y Sistemas", parent=root)
+    if not area: return
+    if accion == "crear":
+        if buscar_grupo(codigo):
+            messagebox.showerror("Error", "Ya existe un grupo con ese código."); return
+        with engine.begin() as conn:
+            conn.execute(grupos.insert().values(codigo=codigo, nombre=nombre, area=area, estado="Activo"))
+    else:
+        if codigo != registro["codigo"] and buscar_grupo(codigo):
+            messagebox.showerror("Error", "El nuevo código ya existe."); return
+        with engine.begin() as conn:
+            conn.execute(update(grupos).where(grupos.c.codigo == registro["codigo"]).values(codigo=codigo, nombre=nombre, area=area))
+            if codigo != registro["codigo"]:
+                conn.execute(update(productos).where(productos.c.grupo_codigo == registro["codigo"]).values(grupo_codigo=codigo))
+                conn.execute(update(grupo_investigador).where(grupo_investigador.c.grupo_codigo == registro["codigo"]).values(grupo_codigo=codigo))
+    cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
+
+
+def gestionar_investigador_gui(accion):
+    seleccionado = tree_inv.selection()
+    registro = None
+    if accion != "crear":
+        if not seleccionado:
+            messagebox.showwarning("Selección", "Seleccione un investigador.")
+            return
+        codigo = tree_inv.item(seleccionado[0])["values"][0]
+        registro = buscar_investigador(codigo)
+        if not registro:
+            messagebox.showerror("Error", "No se encontró el investigador seleccionado.")
+            return
+
+    if accion == "eliminar":
+        if not messagebox.askyesno("Confirmar", f"¿Eliminar investigador {registro['codigo']} y sus productos? "):
+            return
+        with engine.begin() as conn:
+            conn.execute(delete(productos).where(productos.c.investigador_codigo == registro["codigo"]))
+            conn.execute(delete(grupo_investigador).where(grupo_investigador.c.investigador_codigo == registro["codigo"]))
+            conn.execute(delete(investigadores).where(investigadores.c.codigo == registro["codigo"]))
+        cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
+        return
+
+    if accion == "desactivar":
+        with engine.begin() as conn:
+            conn.execute(update(investigadores).where(investigadores.c.codigo == registro["codigo"]).values(estado="Inactivo"))
+        cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
+        return
+
+    codigo = simpledialog.askstring("Investigador", "Código:", initialvalue=registro["codigo"] if registro else "", parent=root)
+    if not codigo: return
+    nombre = simpledialog.askstring("Investigador", "Nombre completo:", initialvalue=registro["nombre"] if registro else "", parent=root)
+    if not nombre: return
+    correo = simpledialog.askstring("Investigador", "Correo:", initialvalue=registro["correo"] if registro else "", parent=root)
+    if not correo: return
+    grupo_actual = ""
+    if registro:
+        with engine.connect() as conn:
+            grupo_actual = conn.execute(select(grupo_investigador.c.grupo_codigo).where(grupo_investigador.c.investigador_codigo == registro["codigo"])).scalars().first() or ""
+    grupo_codigo = simpledialog.askstring("Investigador", "Código del grupo al que pertenece:", initialvalue=grupo_actual or "G-001", parent=root)
+    if not grupo_codigo: return
+    if not buscar_grupo(grupo_codigo):
+        messagebox.showerror("Error", "El grupo indicado no existe."); return
+    if accion == "crear":
+        if buscar_investigador(codigo):
+            messagebox.showerror("Error", "Ya existe un investigador con ese código."); return
+        with engine.begin() as conn:
+            conn.execute(investigadores.insert().values(codigo=codigo, nombre=nombre, correo=correo, estado="Activo"))
+            conn.execute(grupo_investigador.insert().values(grupo_codigo=grupo_codigo, investigador_codigo=codigo))
+    else:
+        if codigo != registro["codigo"] and buscar_investigador(codigo):
+            messagebox.showerror("Error", "El nuevo código ya existe."); return
+        with engine.begin() as conn:
+            conn.execute(update(investigadores).where(investigadores.c.codigo == registro["codigo"]).values(codigo=codigo, nombre=nombre, correo=correo))
+            conn.execute(delete(grupo_investigador).where(grupo_investigador.c.investigador_codigo == registro["codigo"]))
+            conn.execute(grupo_investigador.insert().values(grupo_codigo=grupo_codigo, investigador_codigo=codigo))
+            if codigo != registro["codigo"]:
+                conn.execute(update(productos).where(productos.c.investigador_codigo == registro["codigo"]).values(investigador_codigo=codigo))
+    cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
+
+
+def modificar_producto_gui():
+    seleccionado = tree_prod.selection()
+    if not seleccionado:
+        messagebox.showwarning("Selección", "Seleccione un producto para modificar.")
+        return
+    codigo_original = tree_prod.item(seleccionado[0])["values"][0]
+    registro = buscar_producto(codigo_original)
+    if not registro: return
+    top = tk.Toplevel(root)
+    top.title("Modificar producto")
+    top.geometry("360x430")
+    campos = {}
+    valores = {"Código": "codigo", "Nombre": "nombre", "Categoría": "categoria", "Año": "anio", "Validación": "validacion", "Código investigador": "investigador_codigo", "Código grupo": "grupo_codigo"}
+    for etiqueta, campo in valores.items():
+        tk.Label(top, text=etiqueta).pack(pady=(6, 1))
+        entrada = tk.Entry(top, width=42)
+        entrada.pack()
+        entrada.insert(0, str(registro[campo] or ""))
+        campos[campo] = entrada
+
+    def guardar_cambios():
+        datos_form = {campo: entrada.get().strip() for campo, entrada in campos.items()}
+        if any(not datos_form[k] for k in ("codigo", "nombre", "categoria", "anio", "validacion", "investigador_codigo", "grupo_codigo")):
+            messagebox.showwarning("Datos incompletos", "Complete todos los campos.", parent=top); return
+        try: anio = int(datos_form["anio"])
+        except ValueError:
+            messagebox.showerror("Año inválido", "El año debe ser numérico.", parent=top); return
+        if datos_form["codigo"] != codigo_original and buscar_producto(datos_form["codigo"]):
+            messagebox.showerror("Código duplicado", "Ya existe un producto con ese código.", parent=top); return
+        if not buscar_investigador(datos_form["investigador_codigo"]) or not buscar_grupo(datos_form["grupo_codigo"]):
+            messagebox.showerror("Relación inválida", "El investigador y el grupo deben existir.", parent=top); return
+        with engine.begin() as conn:
+            conn.execute(update(productos).where(productos.c.codigo == codigo_original).values(
+                codigo=datos_form["codigo"], nombre=datos_form["nombre"], categoria=datos_form["categoria"],
+                anio=anio, validacion=datos_form["validacion"], investigador_codigo=datos_form["investigador_codigo"],
+                grupo_codigo=datos_form["grupo_codigo"]))
+        cargar_estructuras_guardadas(); refrescar_todas_las_tablas(); top.destroy()
+
+    tk.Button(top, text="Guardar cambios", command=guardar_cambios).pack(pady=12)
 
 def iniciar_interfaz_grafica():
-    global tree_grupos, tree_inv, tree_prod, tree_multi, ent_buscar, combo_cat, combo_est, combo_anio, panel_der_dash
+    global root, tree_grupos, tree_inv, tree_prod, tree_multi, ent_buscar, combo_cat, combo_est, combo_anio, panel_der_dash, ent_anio
     
     crear_tablas()
     
@@ -597,7 +929,7 @@ def iniciar_interfaz_grafica():
 
     root = tk.Tk()
     root.title("PEA-i - Sistema de Gestión de Investigación (UPC)")
-    root.geometry("1100x680")
+    root.geometry("1150x680")
 
     style = ttk.Style(root); style.theme_use("clam")
     root.configure(bg="#f8fafc")
@@ -624,10 +956,10 @@ def iniciar_interfaz_grafica():
     combo_cat.bind("<<ComboboxSelected>>", lambda e: refrescar_todas_las_tablas())
 
     tk.Label(frame_search, text="Año:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(8, 2))
-    with engine.connect() as conn: anios_db = sorted(list(set([str(r[0]) for r in conn.execute(select(productos.c.anio).distinct()).all() if r[0]])))
-    combo_anio = ttk.Combobox(frame_search, values=["Todos"] + anios_db, state="readonly", width=8)
-    combo_anio.current(0); combo_anio.pack(side="left", padx=4)
-    combo_anio.bind("<<ComboboxSelected>>", lambda e: refrescar_todas_las_tablas())
+    ent_anio = tk.Entry(frame_search, font=("Segoe UI", 9), relief="solid", bd=1, width=8)
+    ent_anio.insert(0, "Todos")
+    ent_anio.pack(side="left", padx=4, ipady=2)
+    ent_anio.bind("<KeyRelease>", lambda e: refrescar_todas_las_tablas())
 
     tk.Label(frame_search, text="Estado:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(8, 2))
     combo_est = ttk.Combobox(frame_search, values=["Todos", "Activo", "Inactivo"], state="readonly", width=10)
@@ -643,11 +975,13 @@ def iniciar_interfaz_grafica():
 
     btn_bar_p = ttk.Frame(frame_p); btn_bar_p.pack(fill="x", pady=6)
     ttk.Button(btn_bar_p, text="Crear Producto", style="Success.TButton", command=lambda: abrir_formulario_producto(root)).pack(side="left", padx=3)
+    ttk.Button(btn_bar_p, text="Modificar", command=modificar_producto_gui).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Activar", style="Success.TButton", command=activar_producto_gui).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Desactivar", command=desactivar_producto_gui).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Eliminar", style="Danger.TButton", command=eliminar_producto_gui).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Web Scraping", style="Primary.TButton", command=lambda: descargar_desde_url_gui(root)).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Importar CSV", style="Primary.TButton", command=lambda: importar_csv_gui(root)).pack(side="left", padx=3)
+    ttk.Button(btn_bar_p, text="Eval. Minciencias 2024", style="Success.TButton", command=lambda: abrir_reporte_minciencias_gui(root)).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Deshacer (Pop Pila)", style="Danger.TButton", command=deshacer_ultimo_pila_gui).pack(side="right", padx=3)
     ttk.Button(btn_bar_p, text="Ver Pila/Cola", style="Primary.TButton", command=lambda: ver_estado_pila_cola_gui(root)).pack(side="right", padx=3)
 
@@ -669,6 +1003,16 @@ def iniciar_interfaz_grafica():
     tree_inv = ttk.Treeview(frame_gi, columns=cols_i, show="headings", height=5)
     for col in cols_i: tree_inv.heading(col, text=col)
     tree_inv.pack(fill="both", expand=True, padx=5, pady=2)
+
+    botones_g = ttk.Frame(frame_gi); botones_g.pack(fill="x", padx=5, pady=4)
+    ttk.Button(botones_g, text="Crear grupo", command=lambda: gestionar_grupo_gui("crear")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Modificar grupo", command=lambda: gestionar_grupo_gui("modificar")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Desactivar grupo", command=lambda: gestionar_grupo_gui("desactivar")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Eliminar grupo", command=lambda: gestionar_grupo_gui("eliminar")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Crear investigador", command=lambda: gestionar_investigador_gui("crear")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Modificar investigador", command=lambda: gestionar_investigador_gui("modificar")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Desactivar investigador", command=lambda: gestionar_investigador_gui("desactivar")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Eliminar investigador", command=lambda: gestionar_investigador_gui("eliminar")).pack(side="left", padx=2)
 
     # Pestaña 4: Multilista Jerárquica
     frame_m = ttk.Frame(notebook); notebook.add(frame_m, text="Vista de la relacion entre datos")
