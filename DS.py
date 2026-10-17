@@ -26,6 +26,14 @@ RUTA_BD = os.path.join(
 engine = create_engine(f"sqlite:///{RUTA_BD}")
 metadata = MetaData()
 
+VENTANAS = {
+    "Todos": None,
+    "Últimos 2 años": 2,
+    "Últimos 5 años": 5,
+    "Últimos 7 años": 7,
+    "Últimos 10 años": 10,
+}
+
 grupos = Table(
     "grupos",
     metadata,
@@ -121,11 +129,17 @@ def calcular_itp_minciencias(num_productos: int, periodo_observacion: int) -> fl
     valor = (num_productos / periodo_observacion) + 1
     return math.log(valor)
 
+def evaluar_grupo_seleccionado():
+    sel = tree_grupos.selection()
+    if sel:
+        codigo = tree_grupos.item(sel[0])["values"][0]
+    else:
+        codigo = simpledialog.askstring("Evaluación Minciencias", "Código del grupo a evaluar:", parent=root)
+        if not codigo:
+            return
+    abrir_reporte_minciencias_gui(root, codigo.strip())
+    
 def abrir_reporte_minciencias_gui(root, grupo_codigo="G-001"):
-    """
-    Genera y muestra una ventana emergente con la evaluación oficial Minciencias 2024 del grupo.
-    Incluye manejo de excepciones para evitar pantallas en blanco.
-    """
     try:
         with engine.connect() as conn:
             g_info = conn.execute(select(grupos).where(grupos.c.codigo == grupo_codigo)).mappings().first()
@@ -273,7 +287,18 @@ def buscar_investigador(codigo):
 def buscar_producto(codigo):
     with engine.connect() as conn:
         return conn.execute(select(productos).where(productos.c.codigo == codigo)).mappings().first()
-
+    
+def existe_producto_duplicado(nombre, anio, grupo_codigo, excluir_codigo=None):
+    with engine.connect() as conn:
+        stmt = select(productos.c.codigo).where(
+            (func.lower(productos.c.nombre) == nombre.strip().lower())
+            & (productos.c.anio == anio)
+            & (productos.c.grupo_codigo == grupo_codigo)
+        )
+        if excluir_codigo:
+            stmt = stmt.where(productos.c.codigo != excluir_codigo)
+        return conn.execute(stmt).first() is not None
+    
 def limpiar_base_datos():
     with engine.begin() as conn:
         conn.execute(delete(productos))
@@ -283,6 +308,14 @@ def limpiar_base_datos():
     pila_productos.clear()
     cola_productos.clear()
     vaciar_multilista()
+
+def siguiente_codigo(tabla, prefijo):
+    with engine.connect() as conn:
+        codigos = conn.execute(select(tabla.c.codigo).where(tabla.c.codigo.like(f"{prefijo}%"))).scalars().all()
+    nums = [int(m.group(1)) for c in codigos if (m := re.search(r"(\d+)$", c))]
+    return f"{prefijo}{(max(nums) + 1 if nums else 1):03d}"
+
+codigo_prod = siguiente_codigo(productos, "PROD-WEB-")    
 
 def cargar_estructuras_guardadas():
     pila_productos.clear()
@@ -353,7 +386,8 @@ def descargar_desde_url_gui(ventana_padre):
             html = urllib.request.urlopen(req).read().decode('iso-8859-1')
 
         soup = BeautifulSoup(html, 'html.parser')
-        g_cod = "G-001"
+        m = re.search(r"nro=0*(\d+)", url)
+        g_cod = f"G-{int(m.group(1)):03d}" if m else "G-001"
         g_nom = "Grupo de Investigación en Sistemas y Computación"
         
         header_grupo = soup.find(
@@ -373,7 +407,7 @@ def descargar_desde_url_gui(ventana_padre):
 
         lista_investigadores = []
         mapa_investigadores = {}
-        inv_contador = 1
+        inv_contador = int(siguiente_codigo(investigadores, "INV-").split("-")[1])
 
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].lower()
@@ -382,7 +416,14 @@ def descargar_desde_url_gui(ventana_padre):
                 nombre_inv = re.sub(r'^\d+\s*[-\.]\s*', '', nombre_inv).strip()
                 if len(nombre_inv.split()) >= 2 and len(nombre_inv) < 50 and not any(char.isdigit() for char in nombre_inv):
                     if nombre_inv.lower() not in mapa_investigadores:
-                        cod_inv = f"INV-{inv_contador:03d}"
+                        with engine.connect() as conn:
+                            existente = conn.execute(
+                                select(investigadores.c.codigo).where(func.lower(investigadores.c.nombre) == nombre_inv.lower())
+                                ).scalar()
+                        # Cada investigador nuevo necesita un código diferente.
+                        # No se usa siguiente_codigo() dentro de este ciclo porque
+                        # todavía no se han guardado los investigadores en la BD.
+                        cod_inv = existente or f"INV-{inv_contador:03d}"
                         lista_investigadores.append((cod_inv, nombre_inv, f"inv{inv_contador}@unicesar.edu.co"))
                         mapa_investigadores[nombre_inv.lower()] = cod_inv
                         inv_contador += 1
@@ -395,12 +436,24 @@ def descargar_desde_url_gui(ventana_padre):
 
         with engine.begin() as conn:
             for cod, nom, cor in lista_investigadores:
-                if not conn.execute(select(investigadores).where(investigadores.c.codigo == cod)).first():
+                if not conn.execute(select(investigadores.c.codigo).where(investigadores.c.codigo == cod)).first():
                     conn.execute(investigadores.insert().values(codigo=cod, nombre=nom, correo=cor, estado="Activo"))
-                    conn.execute(grupo_investigador.insert().values(grupo_codigo=g_cod, investigador_codigo=cod))
+
+                # Asociar al grupo también a investigadores que ya existían.
+                asociacion = conn.execute(
+                    select(grupo_investigador.c.grupo_codigo).where(
+                        (grupo_investigador.c.grupo_codigo == g_cod)
+                        & (grupo_investigador.c.investigador_codigo == cod)
+                    )
+                ).first()
+                if not asociacion:
+                    conn.execute(grupo_investigador.insert().values(
+                        grupo_codigo=g_cod, investigador_codigo=cod
+                    ))
+
                 agregar_o_buscar_investigador_ml(g_cod, cod, nom, cor)
 
-        contador_prod = 1
+        nuevos = 0
         registros_extraidos = []
         categoria_actual = "Artículo"
 
@@ -433,8 +486,23 @@ def descargar_desde_url_gui(ventana_padre):
                 nombre_prod = re.sub(r'^\d+[\.\-\s]+[A-ZÁÉÍÓÚÑa-záéíóúñ\s\.-]+(?:[\-\–\—]|\bde\b|\bpiso\b).*?\.\s*', '', nombre_prod, flags=re.IGNORECASE)
                 nombre_prod = re.sub(r'^\d+[\.\-\s]+', '', nombre_prod)
                 nombre_prod = nombre_prod[:120].strip()
+                if existe_producto_duplicado(nombre_prod, anio, g_cod):
+                    continue
 
-                codigo_prod = f"PROD-WEB-{contador_prod:03d}"
+                codigo_prod = siguiente_codigo(productos, "PROD-WEB-")
+
+                with engine.connect() as conn:
+                    dup = conn.execute(
+                        select(productos.c.codigo).where(
+                            (productos.c.nombre == nombre_prod)
+                            & (productos.c.anio == anio)
+                            & (productos.c.grupo_codigo == g_cod)
+                        )
+                    ).first()
+                if dup:
+                    continue
+
+                codigo_prod = siguiente_codigo(productos, "PROD-WEB-")
 
                 inv_asociado_cod = lista_investigadores[0][0]
                 for nom_inv, cod_inv in mapa_investigadores.items():
@@ -455,12 +523,12 @@ def descargar_desde_url_gui(ventana_padre):
                                 investigador_codigo=inv_asociado_cod, grupo_codigo=g_cod
                             )
                         )
+
                     pila_productos.append(codigo_prod)
                     cola_productos.append(codigo_prod)
                     agregar_producto_ml(g_cod, inv_asociado_cod, codigo_prod, nombre_prod, categoria_actual, anio, "Validado")
-                    contador_prod += 1
-
-                registros_extraidos.append([codigo_prod, nombre_prod, categoria_actual, anio, "Validado", g_cod, inv_asociado_cod])
+                    nuevos += 1
+                    registros_extraidos.append([codigo_prod, nombre_prod, categoria_actual, anio, "Validado", g_cod, inv_asociado_cod])
 
         with open("datos_scraping.csv", mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
@@ -470,10 +538,12 @@ def descargar_desde_url_gui(ventana_padre):
         cargar_estructuras_guardadas()
         refrescar_todas_las_tablas()
 
-        messagebox.showinfo("Éxito", f"Web Scraping completado:\n• Grupo: {g_nom}\n• {len(lista_investigadores)} Investigadores.\n• {contador_prod - 1} Productos limpios procesados.")
+        messagebox.showinfo("Éxito", f"Web Scraping completado:\n• Grupo: {g_nom}\n• {len(lista_investigadores)} Investigadores.\n• {nuevos} Productos limpios procesados.")
 
     except Exception as e:
         messagebox.showerror("Error", f"Error en Web Scraping: {e}")
+
+
 
 def importar_csv_gui(ventana_padre):
     archivo_csv = simpledialog.askstring("Importar CSV", "Nombre del archivo CSV [Por defecto: datos_scraping.csv]:", parent=ventana_padre)
@@ -491,6 +561,8 @@ def importar_csv_gui(ventana_padre):
                     g_cod = fila.get("grupo_codigo", "G-001")
                     i_cod = fila.get("investigador_codigo", "INV-001")
                     p_cod = fila["codigo"]
+                    if existe_producto_duplicado(fila["nombre"], int(fila["anio"]), g_cod):
+                        continue
                     if not conn.execute(select(productos.c.codigo).where(productos.c.codigo == p_cod)).scalar():
                         conn.execute(productos.insert().values(
                             codigo=p_cod, nombre=fila["nombre"], categoria=fila["categoria"],
@@ -532,10 +604,13 @@ def refrescar_tabla_investigadores(tree):
     for i, inv in enumerate(registros):
         tree.insert("", "end", values=(inv["codigo"], inv["nombre"], inv["grupos"] or "Sin grupo", inv["estado"]), tags=("evenrow" if i%2==0 else "oddrow",))
 
-def refrescar_tabla_productos(tree, texto_filtro="", cat_filtro="Todas", est_filtro="Todos", anio_filtro="Todos"):
+def refrescar_tabla_productos(tree, texto_filtro="", cat_filtro="Todas", est_filtro="Todos", anio_filtro="Todos", ventana="Todos"):
     for item in tree.get_children(): tree.delete(item)
+    n = VENTANAS.get(ventana)
     with engine.connect() as conn:
         stmt = select(productos)
+        if n:
+            stmt = stmt.where(productos.c.anio >= datetime.now().year - n)
         if texto_filtro.strip():
             f = f"%{texto_filtro.strip()}%"
             stmt = stmt.where((productos.c.codigo.like(f)) | (productos.c.nombre.like(f)) | (productos.c.categoria.like(f)))
@@ -594,6 +669,7 @@ def refrescar_dashboard_sigiip():
     plt.tight_layout()
     canvas_dash = FigureCanvasTkAgg(fig, master=panel_der_dash)
     canvas_dash.draw()
+    plt.close(fig)
     canvas_dash.get_tk_widget().pack(fill="both", expand=True)
 
 def refrescar_todas_las_tablas():
@@ -671,6 +747,9 @@ def abrir_formulario_producto(root):
         with engine.connect() as conn:
             g_cod = conn.execute(select(grupo_investigador.c.grupo_codigo).where(grupo_investigador.c.investigador_codigo == inv_cod)).scalars().first()
         g_final = g_cod or "G-001"
+        if existe_producto_duplicado(n, a, g_final):
+            messagebox.showerror("Error", "Ya existe un producto con ese nombre y año en el grupo.", parent=top)
+            return
         if not buscar_grupo(g_final):
             messagebox.showerror("Error", "El investigador debe estar asociado a un grupo existente.", parent=top); return
         with engine.begin() as conn:
@@ -782,9 +861,10 @@ def gestionar_grupo_gui(accion):
         cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
         return
 
-    if accion == "desactivar":
+    if accion in ("desactivar", "activar"):
+        nuevo_estado = "Inactivo" if accion == "desactivar" else "Activo"
         with engine.begin() as conn:
-            conn.execute(update(grupos).where(grupos.c.codigo == registro["codigo"]).values(estado="Inactivo"))
+            conn.execute(update(grupos).where(grupos.c.codigo == registro["codigo"]).values(estado=nuevo_estado))
         cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
         return
 
@@ -833,9 +913,10 @@ def gestionar_investigador_gui(accion):
         cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
         return
 
-    if accion == "desactivar":
+    if accion in ("desactivar", "activar"):
+        nuevo_estado = "Inactivo" if accion == "desactivar" else "Activo"
         with engine.begin() as conn:
-            conn.execute(update(investigadores).where(investigadores.c.codigo == registro["codigo"]).values(estado="Inactivo"))
+            conn.execute(update(investigadores).where(investigadores.c.codigo == registro["codigo"]).values(estado=nuevo_estado))
         cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
         return
 
@@ -868,6 +949,7 @@ def gestionar_investigador_gui(accion):
             conn.execute(grupo_investigador.insert().values(grupo_codigo=grupo_codigo, investigador_codigo=codigo))
             if codigo != registro["codigo"]:
                 conn.execute(update(productos).where(productos.c.investigador_codigo == registro["codigo"]).values(investigador_codigo=codigo))
+            conn.execute(update(productos).where(productos.c.investigador_codigo == codigo).values(grupo_codigo=grupo_codigo))
     cargar_estructuras_guardadas(); refrescar_todas_las_tablas()
 
 
@@ -898,10 +980,16 @@ def modificar_producto_gui():
         try: anio = int(datos_form["anio"])
         except ValueError:
             messagebox.showerror("Año inválido", "El año debe ser numérico.", parent=top); return
+        
+        if existe_producto_duplicado(datos_form["nombre"], anio, datos_form["grupo_codigo"], excluir_codigo=codigo_original):
+            messagebox.showerror("Duplicado", "Ya existe otro producto con ese nombre y año en el grupo.", parent=top); return
+        
         if datos_form["codigo"] != codigo_original and buscar_producto(datos_form["codigo"]):
             messagebox.showerror("Código duplicado", "Ya existe un producto con ese código.", parent=top); return
+        
         if not buscar_investigador(datos_form["investigador_codigo"]) or not buscar_grupo(datos_form["grupo_codigo"]):
             messagebox.showerror("Relación inválida", "El investigador y el grupo deben existir.", parent=top); return
+        
         with engine.begin() as conn:
             conn.execute(update(productos).where(productos.c.codigo == codigo_original).values(
                 codigo=datos_form["codigo"], nombre=datos_form["nombre"], categoria=datos_form["categoria"],
@@ -911,8 +999,14 @@ def modificar_producto_gui():
 
     tk.Button(top, text="Guardar cambios", command=guardar_cambios).pack(pady=12)
 
+def siguiente_codigo(tabla, prefijo):
+    with engine.connect() as conn:
+        codigos = conn.execute(select(tabla.c.codigo).where(tabla.c.codigo.like(f"{prefijo}%"))).scalars().all()
+    nums = [int(m.group(1)) for c in codigos if (m := re.search(r"(\d+)$", c))]
+    return f"{prefijo}{(max(nums) + 1 if nums else 1):03d}"
+
 def iniciar_interfaz_grafica():
-    global root, tree_grupos, tree_inv, tree_prod, tree_multi, ent_buscar, combo_cat, combo_est, combo_anio, panel_der_dash, ent_anio
+    global root, tree_grupos, tree_inv, tree_prod, tree_multi, ent_buscar, combo_cat, combo_est, combo_anio, panel_der_dash, ent_anio, combo_ventana
     
     crear_tablas()
     
@@ -932,6 +1026,9 @@ def iniciar_interfaz_grafica():
     root.geometry("1150x680")
 
     style = ttk.Style(root); style.theme_use("clam")
+    for nombre, bg, hover in [("Primary","#0284c7","#0369a1"),("Success","#16a34a","#15803d"),("Danger","#dc2626","#b91c1c")]:
+        style.configure(f"{nombre}.TButton", background=bg, foreground="white", font=("Segoe UI", 9, "bold"), padding=6)
+        style.map(f"{nombre}.TButton", background=[("active", hover)])
     root.configure(bg="#f8fafc")
     style.configure("TNotebook", background="#f8fafc", borderwidth=0)
     style.configure("TNotebook.Tab", background="#e2e8f0", foreground="#334155", font=("Segoe UI", 9, "bold"), padding=[12, 6])
@@ -946,7 +1043,7 @@ def iniciar_interfaz_grafica():
     frame_p = ttk.Frame(notebook); notebook.add(frame_p, text="Productos")
     frame_search = ttk.Frame(frame_p); frame_search.pack(fill="x", padx=5, pady=(5, 4))
 
-    tk.Label(frame_search, text="🔍 Buscar:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(2, 2))
+    tk.Label(frame_search, text="Buscar:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(2, 2))
     ent_buscar = tk.Entry(frame_search, font=("Segoe UI", 9), relief="solid", bd=1); ent_buscar.pack(side="left", fill="x", expand=True, padx=4, ipady=2)
     ent_buscar.bind("<KeyRelease>", lambda e: refrescar_todas_las_tablas())
 
@@ -954,6 +1051,12 @@ def iniciar_interfaz_grafica():
     combo_cat = ttk.Combobox(frame_search, values=["Todas", "Artículo", "Libro / Capítulo", "Software", "Generica"], state="readonly", width=14)
     combo_cat.current(0); combo_cat.pack(side="left", padx=4)
     combo_cat.bind("<<ComboboxSelected>>", lambda e: refrescar_todas_las_tablas())
+
+    tk.Label(frame_search, text="Ventana:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(8, 2))
+    combo_ventana = ttk.Combobox(frame_search, values=list(VENTANAS), state="readonly", width=14)
+    combo_ventana.current(0)
+    combo_ventana.pack(side="left", padx=4)
+    combo_ventana.bind("<<ComboboxSelected>>", lambda e: refrescar_todas_las_tablas())
 
     tk.Label(frame_search, text="Año:", font=("Segoe UI", 9, "bold"), bg="#f8fafc", fg="#0f172a").pack(side="left", padx=(8, 2))
     ent_anio = tk.Entry(frame_search, font=("Segoe UI", 9), relief="solid", bd=1, width=8)
@@ -981,7 +1084,7 @@ def iniciar_interfaz_grafica():
     ttk.Button(btn_bar_p, text="Eliminar", style="Danger.TButton", command=eliminar_producto_gui).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Web Scraping", style="Primary.TButton", command=lambda: descargar_desde_url_gui(root)).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Importar CSV", style="Primary.TButton", command=lambda: importar_csv_gui(root)).pack(side="left", padx=3)
-    ttk.Button(btn_bar_p, text="Eval. Minciencias 2024", style="Success.TButton", command=lambda: abrir_reporte_minciencias_gui(root)).pack(side="left", padx=3)
+    ttk.Button(btn_bar_p, text="Eval. Minciencias 2024", style="Success.TButton", command=evaluar_grupo_seleccionado).pack(side="left", padx=3)
     ttk.Button(btn_bar_p, text="Deshacer (Pop Pila)", style="Danger.TButton", command=deshacer_ultimo_pila_gui).pack(side="right", padx=3)
     ttk.Button(btn_bar_p, text="Ver Pila/Cola", style="Primary.TButton", command=lambda: ver_estado_pila_cola_gui(root)).pack(side="right", padx=3)
 
@@ -1012,6 +1115,8 @@ def iniciar_interfaz_grafica():
     ttk.Button(botones_g, text="Crear investigador", command=lambda: gestionar_investigador_gui("crear")).pack(side="left", padx=2)
     ttk.Button(botones_g, text="Modificar investigador", command=lambda: gestionar_investigador_gui("modificar")).pack(side="left", padx=2)
     ttk.Button(botones_g, text="Desactivar investigador", command=lambda: gestionar_investigador_gui("desactivar")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Activar grupo", command=lambda: gestionar_grupo_gui("activar")).pack(side="left", padx=2)
+    ttk.Button(botones_g, text="Activar investigador", command=lambda: gestionar_investigador_gui("activar")).pack(side="left", padx=2)
     ttk.Button(botones_g, text="Eliminar investigador", command=lambda: gestionar_investigador_gui("eliminar")).pack(side="left", padx=2)
 
     # Pestaña 4: Multilista Jerárquica
