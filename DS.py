@@ -74,6 +74,44 @@ productos = Table(
 
 metadata.create_all(engine)
 
+def calcular_indicador_oficial(productos_lista, num_autores=1, num_grupos_externos=1):
+    conteo = {"Nc.Top": 0, "Nc.A": 0, "Nc.B": 0, "AP": 0, "DPC": 0, "Fr.A": 0, "Fr.B": 0}
+    total_activos = 0
+
+    for prod in productos_lista:
+        estado = str(prod.get("estado", "Activo")).strip().lower()
+        activo = prod.get("activo", estado == "activo")
+        if not activo:
+            continue
+
+        total_activos += 1
+        cat = str(prod.get("categoria", "")).upper().replace(" ", "_")
+
+        if any(x in cat for x in ("OPEN_A1", "ART_A1", "NC.TOP", "TOP", "PATENTE")):
+            conteo["Nc.Top"] += 1
+        elif any(x in cat for x in ("OPEN_A2", "ART_A2", "NC.A")):
+            conteo["Nc.A"] += 1
+        elif any(x in cat for x in ("ART_B", "ART_C", "NC.B")):
+            conteo["Nc.B"] += 1
+        elif "APROPIACION" in cat or cat == "AP" or "APROPIACION_SOCIAL" in cat:
+            conteo["AP"] += 1
+        elif "DIVULGACION" in cat or "DPC" in cat:
+            conteo["DPC"] += 1
+        elif any(x in cat for x in ("FR_A", "TESIS_DOC", "TESIS_MAE", "FORMACION_POSGRADO")):
+            conteo["Fr.A"] += 1
+        else:
+            conteo["Fr.B"] += 1
+
+    denominador = total_activos - 1 if total_activos > 1 else 1.0
+    cohe = num_autores / denominador
+    coop = num_grupos_externos / denominador
+    resultado = (
+        3.7 * conteo["Nc.Top"] + 2.3 * conteo["Nc.A"] +
+        0.4 * conteo["Nc.B"] + 1.5 * conteo["AP"] +
+        0.5 * conteo["DPC"] + conteo["Fr.A"] +
+        0.2 * conteo["Fr.B"] + 0.1 * cohe + 0.3 * coop
+    )
+    return round(resultado, 4), conteo
 
 def validar_requisitos_existencia_minciencias(grupo_dict: dict) -> tuple[bool, str]:
     """
@@ -143,82 +181,80 @@ def abrir_reporte_minciencias_gui(root, grupo_codigo="G-001"):
     try:
         with engine.connect() as conn:
             g_info = conn.execute(select(grupos).where(grupos.c.codigo == grupo_codigo)).mappings().first()
-            num_inv = conn.execute(select(func.count()).select_from(grupo_investigador).where(grupo_investigador.c.grupo_codigo == grupo_codigo)).scalar()
-            prods_grupo = conn.execute(select(productos).where(productos.c.grupo_codigo == grupo_codigo)).mappings().all()
+            investigadores_grupo = conn.execute(
+                select(investigadores.c.codigo, investigadores.c.nombre)
+                .select_from(investigadores.join(
+                    grupo_investigador,
+                    investigadores.c.codigo == grupo_investigador.c.investigador_codigo
+                ))
+                .where(grupo_investigador.c.grupo_codigo == grupo_codigo)
+                .order_by(investigadores.c.nombre)
+            ).mappings().all()
+            prods_grupo = conn.execute(
+                select(productos).where(productos.c.grupo_codigo == grupo_codigo)
+            ).mappings().all()
 
         if not g_info:
             messagebox.showwarning("Atención", f"No se encontró el grupo '{grupo_codigo}' en la base de datos.")
             return
 
-        edad_texto = simpledialog.askstring(
-            "Evaluación del grupo", "¿Cuántos años de existencia tiene el grupo?",
-            parent=root
+        lista_prods = [dict(p) for p in prods_grupo]
+        ind_total, conteo = calcular_indicador_oficial(
+            lista_prods, num_autores=len(investigadores_grupo), num_grupos_externos=1
         )
-        if edad_texto is None:
-            return
-        proyectos_texto = simpledialog.askstring(
-            "Evaluación del grupo", "¿Cuántos proyectos tiene en ejecución?",
-            parent=root
-        )
-        if proyectos_texto is None:
-            return
-        try:
-            edad_grupo = int(edad_texto)
-            proyectos_activos = int(proyectos_texto)
-            if edad_grupo < 0 or proyectos_activos < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Datos inválidos", "La edad y los proyectos deben ser números enteros no negativos.", parent=root)
-            return
 
-        datos_evaluacion = {
-            "nombre": g_info["nombre"],
-            "num_integrantes": num_inv if num_inv is not None else 0,
-            "edad_anos": edad_grupo,
-            "proyectos_ejecucion": proyectos_activos
-        }
-
-        cumple, mensaje_val = validar_requisitos_existencia_minciencias(datos_evaluacion)
-        
-        lista_prods_dict = [dict(p) for p in prods_grupo]
-        prods_en_ventana = filtrar_por_ventana_observacion_minciencias(lista_prods_dict, "Todas")
-        itp_val = calcular_itp_minciencias(len(prods_en_ventana), periodo_observacion=7)
+        lineas_individuales = []
+        for inv in investigadores_grupo:
+            prods_inv = [
+                p for p in lista_prods
+                if p.get("investigador_codigo") == inv["codigo"]
+            ]
+            ind_inv, conteo_inv = calcular_indicador_oficial(
+                prods_inv, num_autores=1, num_grupos_externos=1
+            )
+            activos_inv = sum(
+                1 for p in prods_inv
+                if str(p.get("estado", "Activo")).strip().lower() == "activo"
+            )
+            lineas_individuales.append(
+                f"Investigador: {inv['nombre']} ({inv['codigo']})\\n"
+                f"  Productos activos: {activos_inv}\\n"
+                f"  Indicador individual: {ind_inv}\\n"
+            )
 
         top = tk.Toplevel(root)
-        top.title(f"Evaluación Minciencias 2024 - {g_info['nombre']}")
-        top.geometry("580x460")
-        top.configure(bg="#0f172a")
+        top.title(f"Indicador de producción científica - {g_info['nombre']}")
+        top.geometry("760x620")
 
-        tk.Label(top, text="EVALUACIÓN OFICIAL MODELO MINCIENCIAS 2024", font=("Segoe UI", 11, "bold"), bg="#0f172a", fg="#38bdf8").pack(pady=(12, 6))
+        reporte_texto = f"""INDICADOR DE PRODUCCIÓN CIENTÍFICA
 
-        txt = tk.Text(top, wrap="word", font=("Consolas", 10), bg="#1e293b", fg="#f8fafc", bd=0, padx=12, pady=12)
-        txt.pack(fill="both", expand=True, padx=12, pady=10)
+GRUPO: {g_info['nombre']}
+Código: {g_info['codigo']}
+Investigadores asociados: {len(investigadores_grupo)}
+Productos registrados en el grupo: {len(lista_prods)}
 
-        reporte_texto = f"""=== DATOS GENERALES DEL GRUPO ===
-• Código: {g_info['codigo']}
-• Nombre: {g_info['nombre']}
-• Área: {g_info['area']}
-• Integrantes Activos en BD: {datos_evaluacion['num_integrantes']}
+DETALLE DEL INDICADOR DEL GRUPO
+Nc.Top (peso 3.7): {conteo['Nc.Top']}
+Nc.A   (peso 2.3): {conteo['Nc.A']}
+Nc.B   (peso 0.4): {conteo['Nc.B']}
+AP     (peso 1.5): {conteo['AP']}
+DPC    (peso 0.5): {conteo['DPC']}
+Fr.A   (peso 1.0): {conteo['Fr.A']}
+Fr.B   (peso 0.2): {conteo['Fr.B']}
 
-=== 1. VALIDACIÓN DE EXISTENCIA (Cap. II, Num. 2.1.1) ===
-Estado: {"[ CUMPLE ]" if cumple else "[ NO CUMPLE ]"}
-Detalle: {mensaje_val}
+INDICADOR FINAL DEL GRUPO: {ind_total}
 
-=== 2. VENTANA DE OBSERVACIÓN Y PRODUCTOS ===
-• Total productos registrados: {len(prods_grupo)}
-• Productos en ventana válida (<= 7 años): {len(prods_en_ventana)}
+INDICADORES POR INVESTIGADOR
+{chr(10).join(lineas_individuales) if lineas_individuales else 'No hay investigadores asociados a este grupo.'}
 
-=== 3. INDICADOR DE PRODUCTOS (I_TP) ===
-• Fórmula oficial: lambda = ln((Productos / Periodo) + 1)
-• Periodo de observación base: 7 años
-• Resultado I_TP calculado: {itp_val:.4f}
+Nota: solo se ponderan productos con estado Activo.
 """
-        txt.insert("1.0", reporte_texto)
+        txt = tk.Text(top, wrap="word", font=("Consolas", 10))
+        txt.pack(expand=True, fill="both", padx=10, pady=10)
+        txt.insert(tk.END, reporte_texto)
         txt.config(state="disabled")
-
     except Exception as e:
-        messagebox.showerror("Error de Evaluación", f"Ocurrió un error al generar el reporte:\n{e}", parent=root)
-
+        messagebox.showerror("Error", f"Ocurrió un error al generar el reporte: {e}")
 
 pila_productos = []
 cola_productos = deque()
@@ -789,7 +825,7 @@ def ejecutar_procesador_cpp_gui():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     ruta_json = os.path.join(base_dir, "datos_entrada.json")
     fuente_cpp = os.path.join(base_dir, "DS.cpp")
-    ejecutable = os.path.join(base_dir, "DS.exe" if os.name == "nt" else "DS")
+    ejecutable = os.path.join(base_dir, "programa.exe" if os.name == "nt" else "DS")
 
     exportar_todo_a_json(ruta_json)
 
