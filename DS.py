@@ -87,7 +87,9 @@ def calcular_indicador_oficial(productos_lista, num_autores=1, num_grupos_extern
         total_activos += 1
         cat = str(prod.get("categoria", "")).upper().replace(" ", "_")
 
-        if any(x in cat for x in ("OPEN_A1", "ART_A1", "NC.TOP", "TOP", "PATENTE")):
+        # "TOP" solo cuenta con igualdad exacta (misma regla que DS.cpp); como subcadena
+        # capturaría categorías como "DESKTOP" o "TOPOGRAFIA".
+        if cat == "TOP" or any(x in cat for x in ("OPEN_A1", "ART_A1", "NC.TOP", "PATENTE")):
             conteo["Nc.Top"] += 1
         elif any(x in cat for x in ("OPEN_A2", "ART_A2", "NC.A")):
             conteo["Nc.A"] += 1
@@ -190,9 +192,11 @@ def abrir_reporte_minciencias_gui(root, grupo_codigo="G-001"):
                 .where(grupo_investigador.c.grupo_codigo == grupo_codigo)
                 .order_by(investigadores.c.nombre)
             ).mappings().all()
-            prods_grupo = conn.execute(
-                select(productos).where(productos.c.grupo_codigo == grupo_codigo)
-            ).mappings().all()
+            # Misma regla que el JSON exportado: un producto sin grupo se asigna a G-001.
+            filtro_grupo = productos.c.grupo_codigo == grupo_codigo
+            if grupo_codigo == "G-001":
+                filtro_grupo = filtro_grupo | (productos.c.grupo_codigo.is_(None)) | (productos.c.grupo_codigo == "")
+            prods_grupo = conn.execute(select(productos).where(filtro_grupo)).mappings().all()
 
         if not g_info:
             messagebox.showwarning("Atención", f"No se encontró el grupo '{grupo_codigo}' en la base de datos.")
@@ -217,9 +221,9 @@ def abrir_reporte_minciencias_gui(root, grupo_codigo="G-001"):
                 if str(p.get("estado", "Activo")).strip().lower() == "activo"
             )
             lineas_individuales.append(
-                f"Investigador: {inv['nombre']} ({inv['codigo']})\\n"
-                f"  Productos activos: {activos_inv}\\n"
-                f"  Indicador individual: {ind_inv}\\n"
+                f"Investigador: {inv['nombre']} ({inv['codigo']})\n"
+                f"  Productos activos: {activos_inv}\n"
+                f"  Indicador individual: {ind_inv:.4f}\n"
             )
 
         top = tk.Toplevel(root)
@@ -242,7 +246,7 @@ DPC    (peso 0.5): {conteo['DPC']}
 Fr.A   (peso 1.0): {conteo['Fr.A']}
 Fr.B   (peso 0.2): {conteo['Fr.B']}
 
-INDICADOR FINAL DEL GRUPO: {ind_total}
+INDICADOR FINAL DEL GRUPO: {ind_total:.4f}
 
 INDICADORES POR INVESTIGADOR
 {chr(10).join(lineas_individuales) if lineas_individuales else 'No hay investigadores asociados a este grupo.'}
@@ -391,6 +395,7 @@ def cargar_estructuras_guardadas():
 def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
     with engine.connect() as conn:
         registros = conn.execute(select(productos)).mappings().all()
+        asociaciones = conn.execute(select(grupo_investigador)).mappings().all()
 
     lista_productos = []
     for r in registros:
@@ -403,6 +408,15 @@ def exportar_todo_a_json(ruta_salida="datos_entrada.json"):
             "estado": r["estado"],
             "grupo_codigo": r["grupo_codigo"] if r["grupo_codigo"] else "G-001",
             "investigador_codigo": r["investigador_codigo"] if r["investigador_codigo"] else "INV-001"
+        })
+
+    # Registros de asociación grupo-investigador: permiten que el motor C++ cuente los
+    # autores del grupo igual que Python (tabla grupo_investigador), no solo los que tienen productos.
+    for a in asociaciones:
+        lista_productos.append({
+            "tipo": "asociacion",
+            "grupo_codigo": a["grupo_codigo"],
+            "investigador_codigo": a["investigador_codigo"]
         })
 
     with open(ruta_salida, mode='w', encoding='utf-8') as f:
@@ -821,6 +835,15 @@ def activar_producto_gui():
     with engine.begin() as conn: conn.execute(update(productos).where(productos.c.codigo == codigo).values(estado="Activo"))
     refrescar_todas_las_tablas()
 
+def ejecutable_desactualizado(fuente, ejecutable):
+    """True si el ejecutable no existe o si el código fuente C++ es más reciente
+    que el ejecutable (es decir, DS.cpp se modificó después de la última compilación)."""
+    if not os.path.exists(ejecutable):
+        return True
+    if not os.path.exists(fuente):
+        return False  # sin fuente no se puede recompilar; se usa el ejecutable existente
+    return os.path.getmtime(fuente) > os.path.getmtime(ejecutable)
+
 def ejecutar_procesador_cpp_gui():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     ruta_json = os.path.join(base_dir, "datos_entrada.json")
@@ -829,7 +852,7 @@ def ejecutar_procesador_cpp_gui():
 
     exportar_todo_a_json(ruta_json)
 
-    if not os.path.exists(ejecutable):
+    if ejecutable_desactualizado(fuente_cpp, ejecutable):
         compilador = "g++"
         try:
             compilacion = subprocess.run(

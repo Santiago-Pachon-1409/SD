@@ -7,6 +7,8 @@
 #include <cctype>
 #include <cmath>
 #include <algorithm>
+#include <iomanip>
+#include <utility>
 
 using namespace std;
 
@@ -22,7 +24,8 @@ struct Investigador {
 
 struct Grupo {
     string codigo;
-    vector<Investigador> investigadores;
+    vector<Investigador> investigadores;   // autores asociados al grupo
+    vector<Producto> productos;            // todos los productos del grupo
 };
 
 string extraerValor(const string& bloque, const string& clave) {
@@ -60,6 +63,10 @@ string extraerValor(const string& bloque, const string& clave) {
 
 bool estaActivo(const Producto& p) {
     string estado = p.estado;
+    // Mismo criterio que Python: strip() + lower()
+    size_t ini = estado.find_first_not_of(" \t\r\n");
+    size_t fin = estado.find_last_not_of(" \t\r\n");
+    estado = (ini == string::npos) ? "" : estado.substr(ini, fin - ini + 1);
     transform(estado.begin(), estado.end(), estado.begin(),
               [](unsigned char c){ return (char)tolower(c); });
     return estado.empty() || estado == "activo";
@@ -112,7 +119,9 @@ void imprimirDetalle(const Conteo& c) {
     cout << "  Fr.B   (peso 0.2): " << c.frb << "\n";
 }
 
-bool cargarJSON(const string& ruta, vector<Producto>& productos) {
+// asociaciones: pares (grupo_codigo, investigador_codigo) tomados de la tabla grupo_investigador.
+bool cargarJSON(const string& ruta, vector<Producto>& productos,
+                vector<pair<string, string>>& asociaciones) {
     ifstream archivo(ruta, ios::binary);
     if (!archivo) {
         cerr << "Error: no se pudo abrir " << ruta << "\n";
@@ -137,6 +146,13 @@ bool cargarJSON(const string& ruta, vector<Producto>& productos) {
         }
         if (fin >= contenido.size()) break;
         string bloque = contenido.substr(pos, fin-pos+1);
+        if (extraerValor(bloque, "tipo") == "asociacion") {
+            string g = extraerValor(bloque, "grupo_codigo");
+            string i = extraerValor(bloque, "investigador_codigo");
+            if (!g.empty() && !i.empty()) asociaciones.push_back(make_pair(g, i));
+            pos = fin + 1;
+            continue;
+        }
         Producto p;
         p.codigo = extraerValor(bloque, "codigo");
         p.nombre = extraerValor(bloque, "nombre");
@@ -159,26 +175,44 @@ bool cargarJSON(const string& ruta, vector<Producto>& productos) {
 int main(int argc, char* argv[]) {
     string ruta = argc > 1 ? argv[1] : "datos_entrada.json";
     vector<Producto> productos;
-    if (!cargarJSON(ruta, productos)) return 1;
+    vector<pair<string, string>> asociaciones;
+    if (!cargarJSON(ruta, productos, asociaciones)) return 1;
+
+    // Misma salida numérica que Python (round(..., 4))
+    cout << fixed << setprecision(4);
 
     vector<Grupo> grupos;
+    auto obtenerGrupo = [&](const string& codigo) -> Grupo& {
+        for (Grupo& g : grupos) if (g.codigo == codigo) return g;
+        Grupo nuevo;
+        nuevo.codigo = codigo;
+        grupos.push_back(nuevo);
+        return grupos.back();
+    };
+    auto obtenerInvestigador = [](Grupo& g, const string& codigo) -> Investigador& {
+        for (Investigador& i : g.investigadores) if (i.codigo == codigo) return i;
+        Investigador nuevo;
+        nuevo.codigo = codigo;
+        g.investigadores.push_back(nuevo);
+        return g.investigadores.back();
+    };
+
+    // 1) Autores del grupo = tabla grupo_investigador (igual que Python).
+    for (const auto& a : asociaciones)
+        obtenerInvestigador(obtenerGrupo(a.first), a.second);
+    // Si el JSON no trae asociaciones (formato antiguo), los autores se deducen de los productos.
+    bool deducirAutores = asociaciones.empty();
+
+    // 2) Productos: todos van al grupo; al investigador solo si es autor del grupo.
     for (const Producto& p : productos) {
-        auto itG = find_if(grupos.begin(), grupos.end(), [&](const Grupo& g){ return g.codigo == p.grupo_codigo; });
-        if (itG == grupos.end()) {
-            Grupo nuevo;
-            nuevo.codigo = p.grupo_codigo;
-            grupos.push_back(nuevo);
-            itG = grupos.end() - 1;
+        Grupo& g = obtenerGrupo(p.grupo_codigo);
+        g.productos.push_back(p);
+        if (deducirAutores) {
+            obtenerInvestigador(g, p.investigador_codigo).productos.push_back(p);
+        } else {
+            for (Investigador& i : g.investigadores)
+                if (i.codigo == p.investigador_codigo) { i.productos.push_back(p); break; }
         }
-        auto itI = find_if(itG->investigadores.begin(), itG->investigadores.end(),
-                           [&](const Investigador& i){ return i.codigo == p.investigador_codigo; });
-        if (itI == itG->investigadores.end()) {
-            Investigador nuevo;
-            nuevo.codigo = p.investigador_codigo;
-            itG->investigadores.push_back(nuevo);
-            itI = itG->investigadores.end() - 1;
-        }
-        itI->productos.push_back(p);
     }
 
     cout << "============================================================\n";
@@ -187,9 +221,7 @@ int main(int argc, char* argv[]) {
     cout << "Productos leidos del JSON: " << productos.size() << "\n";
 
     for (const Grupo& g : grupos) {
-        vector<Producto> productosGrupo;
-        for (const Investigador& inv : g.investigadores)
-            productosGrupo.insert(productosGrupo.end(), inv.productos.begin(), inv.productos.end());
+        const vector<Producto>& productosGrupo = g.productos;
 
         Conteo cg = calcularIndicador(productosGrupo, (int)g.investigadores.size(), 1);
         cout << "\n------------------------------------------------------------\n";
